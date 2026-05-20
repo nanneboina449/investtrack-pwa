@@ -2,8 +2,8 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  useInvestors, useInvestorBalances, useProfitRecords,
-  createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord
+  useInvestors, useInvestorBalances, useProfitRecords, useExpenses,
+  createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord, createExpense, deleteExpense
 } from '../hooks/useData'
 import { useMyRole } from '../hooks/useSharing'
 import { inr, pct, isoDate, supabase } from '../lib/supabase'
@@ -20,9 +20,11 @@ export default function ProjectDetail() {
   const investors = useInvestors(id)
   const balances  = useInvestorBalances(id)
   const profits   = useProfitRecords(id)
+  const expenses  = useExpenses(id)
 
   const [showAddInv, setShowAddInv]       = useState(false)
   const [showAddProfit, setShowAddProfit] = useState(false)
+  const [showAddExpense, setShowAddExpense] = useState(false)
 
   // Determine current user's role
   const [project, setProject] = useState(null)
@@ -33,7 +35,9 @@ export default function ProjectDetail() {
   const { isOwner, canEdit } = useMyRole(id, project?.is_owner)
 
   const totalShare  = investors.data.reduce((s, i) => s + (i.share_percent ?? 0), 0)
-  const totalProfit = profits.data.reduce((s, p) => s + (p.amount ?? 0), 0)
+  const totalProfit   = profits.data.reduce((s, p) => s + (p.amount ?? 0), 0)
+  const totalExpenses = expenses.data.reduce((s, e) => s + (e.amount ?? 0), 0)
+  const netReturn     = totalProfit - totalExpenses
   const projectName  = project?.name ?? investors.data[0]?.project_name ?? 'Project'
   const projectTotalValue = project?.total_value ?? investors.data[0]?.total_value ?? 0
   const stakePercent = project?.our_stake_percent ?? 100
@@ -42,6 +46,12 @@ export default function ProjectDetail() {
   const handleDeleteInvestor = async (invId) => {
     if (!confirm('Remove this investor?')) return
     try { await deleteInvestor(invId); investors.reload(); show('Investor removed') }
+    catch (e) { show(e.message, 'error') }
+  }
+
+  const handleDeleteExpense = async (eid) => {
+    if (!confirm('Delete this expense?')) return
+    try { await deleteExpense(eid); expenses.reload(); investors.reload(); show('Expense deleted') }
     catch (e) { show(e.message, 'error') }
   }
 
@@ -73,8 +83,9 @@ export default function ProjectDetail() {
             <p className="font-bold mono text-xs">{inr(projectValue)}</p>
           </div>
           <div className="bg-white/10 rounded-xl p-2.5 text-center">
-            <p className="text-brand-100 text-[10px] mb-0.5">Total Profit</p>
-            <p className={`font-bold mono text-xs ${totalProfit >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{inr(totalProfit)}</p>
+            <p className="text-brand-100 text-[10px] mb-0.5">Net Return</p>
+            <p className={`font-bold mono text-xs ${netReturn >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{inr(netReturn)}</p>
+            {totalExpenses > 0 && <p className='text-[9px] text-white/60 mt-0.5'>-{inr(totalExpenses)} exp</p>}
           </div>
           <div className="bg-white/10 rounded-xl p-2.5 text-center">
             <p className="text-brand-100 text-[10px] mb-0.5">Share Filled</p>
@@ -105,6 +116,7 @@ export default function ProjectDetail() {
         <SegControl value={tab} onChange={setTab} options={[
           { value: 'investors', label: `Investors (${investors.data.length})` },
           { value: 'profits',   label: 'Profit History' },
+          { value: 'expenses',  label: `Expenses (${expenses.data.length})` },
           { value: 'balances',  label: 'Balances' },
         ]} />
       </div>
@@ -193,6 +205,55 @@ export default function ProjectDetail() {
           </>
         )}
 
+
+        {/* EXPENSES TAB */}
+        {tab === 'expenses' && (
+          <>
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-sm font-semibold text-gray-700">Total: <span className="text-red-500 mono">{inr(totalExpenses)}</span></p>
+                <p className="text-xs text-gray-400">Split by each investor's share %</p>
+              </div>
+              {canEdit && (
+                <button onClick={() => setShowAddExpense(true)} className="btn-primary text-xs px-3 py-2">+ Add Expense</button>
+              )}
+            </div>
+            {expenses.loading ? <Spinner /> : expenses.data.length === 0 ? (
+              <Empty icon="🧾" title="No expenses yet"
+                action={canEdit && <button onClick={() => setShowAddExpense(true)} className="btn-primary text-sm px-5 py-2.5">Add First Expense</button>} />
+            ) : (
+              expenses.data.map(exp => (
+                <div key={exp.id} className="card p-4">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{EXPENSE_ICONS[exp.category] || '🧾'}</span>
+                      <div>
+                        <p className="font-semibold text-red-600 mono">{inr(exp.amount)}</p>
+                        <p className="text-xs text-gray-600 mt-0.5">{exp.description}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="badge bg-red-50 text-red-700">{exp.category}</span>
+                      <p className="text-xs text-gray-400 mt-1">{new Date(exp.expense_date).toLocaleDateString('en-IN')}</p>
+                      {isOwner && <button onClick={() => handleDeleteExpense(exp.id)} className="text-xs text-red-400 mt-1 block">delete</button>}
+                    </div>
+                  </div>
+                  {exp.notes && <p className="text-xs text-gray-400 mb-2">{exp.notes}</p>}
+                  <div className="bg-red-50 rounded-xl p-3 space-y-1.5">
+                    <p className="text-[10px] font-semibold text-red-400 uppercase tracking-wide mb-2">Charged to each investor</p>
+                    {investors.data.map(inv => (
+                      <div key={inv.investor_id} className="flex justify-between text-xs">
+                        <span className="text-gray-500">{inv.investor_name} ({inv.share_percent}%)</span>
+                        <span className="font-semibold text-red-500 mono">−{inr(exp.amount * inv.share_percent / 100)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+          </>
+        )}
+
         {/* BALANCES TAB */}
         {tab === 'balances' && (
           <>
@@ -218,6 +279,7 @@ export default function ProjectDetail() {
                       {[
                         { l: 'Amount invested',     v: inr(b.amount_invested),              c: 'text-gray-700' },
                         { l: '+ Profit allocated',  v: `+${inr(b.profit_allocated)}`,        c: 'text-emerald-600' },
+                        { l: '− Expenses charged',  v: `-${inr(b.total_expenses_allocated ?? 0)}`, c: 'text-red-500' },
                         { l: '− Loaned out',         v: `-${inr(b.money_loaned_out)}`,        c: 'text-red-500' },
                         { l: '+ Repaid received',   v: `+${inr(b.money_repaid_received)}`,   c: 'text-emerald-600' },
                         { l: '+ Moved to projects', v: `+${inr(b.money_moved_to_projects)}`, c: 'text-blue-600' },
@@ -258,6 +320,13 @@ export default function ProjectDetail() {
         <AddProfitSheet open={showAddProfit} onClose={() => setShowAddProfit(false)}
           projectId={id}
           onSaved={() => { setShowAddProfit(false); profits.reload(); investors.reload(); show('Profit recorded!') }} />
+      )}
+
+      {/* Add Expense Sheet */}
+      {canEdit && (
+        <AddExpenseSheet open={showAddExpense} onClose={() => setShowAddExpense(false)}
+          projectId={id}
+          onSaved={() => { setShowAddExpense(false); expenses.reload(); investors.reload(); show('Expense recorded!') }} />
       )}
 
       {/* Share Modal */}
@@ -338,6 +407,103 @@ function AddProfitSheet({ open, onClose, projectId, onSaved }) {
         <Field label="Notes"><textarea className="input resize-none" rows={2} placeholder="e.g. Q1 rental income" value={form.notes} onChange={e => set('notes', e.target.value)} /></Field>
         {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
         <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Record Profit'}</button>
+      </form>
+    </Sheet>
+  )
+}
+
+// ── Expense category icons ────────────────────────────────────
+const EXPENSE_ICONS = {
+  registration:  '📋',
+  travel:        '✈️',
+  legal:         '⚖️',
+  maintenance:   '🔧',
+  tax:           '🏛️',
+  construction:  '🏗️',
+  other:         '🧾',
+}
+
+// ── Add Expense Sheet ─────────────────────────────────────────
+function AddExpenseSheet({ open, onClose, projectId, onSaved }) {
+  const [form, setForm] = useState({
+    amount: '', category: 'other', description: '', expense_date: isoDate(), notes: ''
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const CATEGORIES = [
+    { value: 'registration', label: '📋 Registration' },
+    { value: 'travel',       label: '✈️ Travel' },
+    { value: 'legal',        label: '⚖️ Legal' },
+    { value: 'maintenance',  label: '🔧 Maintenance' },
+    { value: 'tax',          label: '🏛️ Tax' },
+    { value: 'construction', label: '🏗️ Construction' },
+    { value: 'other',        label: '🧾 Other' },
+  ]
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setSaving(true); setError(null)
+    try {
+      await createExpense({
+        project_id:   projectId,
+        amount:       parseFloat(form.amount),
+        category:     form.category,
+        description:  form.description,
+        expense_date: form.expense_date,
+        notes:        form.notes || null,
+      })
+      setForm({ amount: '', category: 'other', description: '', expense_date: isoDate(), notes: '' })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Add Expense">
+      <form onSubmit={submit} className="space-y-4">
+
+        <Field label="Category">
+          <div className="grid grid-cols-2 gap-2">
+            {CATEGORIES.map(c => (
+              <button key={c.value} type="button"
+                onClick={() => set('category', c.value)}
+                className={`text-sm py-2 px-3 rounded-xl border text-left transition-all
+                  ${form.category === c.value
+                    ? 'border-red-400 bg-red-50 text-red-800 font-semibold'
+                    : 'border-gray-200 text-gray-600'}`}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Description *">
+          <input className="input" placeholder="e.g. Property registration fee" value={form.description}
+            onChange={e => set('description', e.target.value)} required />
+        </Field>
+
+        <Field label="Amount (₹) *">
+          <input className="input" type="number" placeholder="0" value={form.amount}
+            onChange={e => set('amount', e.target.value)} required />
+        </Field>
+
+        <Field label="Date">
+          <input className="input" type="date" value={form.expense_date}
+            onChange={e => set('expense_date', e.target.value)} />
+        </Field>
+
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2} placeholder="Optional details…"
+            value={form.notes} onChange={e => set('notes', e.target.value)} />
+        </Field>
+
+        {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+
+        <button type="submit" className="btn-primary w-full" disabled={saving}
+          style={{ background: '#dc2626' }}>
+          {saving ? 'Saving…' : 'Record Expense'}
+        </button>
       </form>
     </Sheet>
   )

@@ -235,3 +235,32 @@ export function useDashboard() {
     loading: projects.loading || cashflow.loading,
   }
 }
+
+// ── Expenses ──────────────────────────────────────────────────
+export function useExpenses(projectId) {
+  return useFetch(async () => {
+    if (!projectId) return []
+    const { data, error } = await supabase
+      .from('project_expenses')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('expense_date', { ascending: false })
+    if (error) throw error
+    return data
+  }, [projectId])
+}
+
+export async function createExpense(values) {
+  const { data, error } = await supabase
+    .from('project_expenses')
+    .insert(values)
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteExpense(id) {
+  const { error } = await supabase.from('project_expenses').delete().eq('id', id)
+  if (error) throw error
+}
