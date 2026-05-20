@@ -6,12 +6,39 @@
   * { -webkit-tap-highlight-color: transparent; }
 
   body {
-    @apply bg-gray-50 text-gray-900 antialiased;
+    @apply antialiased;
+    min-height: 100vh;
+    background: #0f0c29;
+    background: linear-gradient(135deg, #0f0c29 0%, #1a1a4e 40%, #24243e 100%);
+    background-attachment: fixed;
     padding-bottom: env(safe-area-inset-bottom);
   }
 
-  /* Safe area for notched phones */
-  .safe-bottom { padding-bottom: calc(env(safe-area-inset-bottom) + 4rem); }
+  /* Animated dot grid overlay on desktop background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(255,255,255,0.06) 1px, transparent 0);
+    background-size: 32px 32px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Glow orbs */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 60% 50% at 15% 20%, rgba(99,102,241,0.15) 0%, transparent 60%),
+      radial-gradient(ellipse 50% 40% at 85% 80%, rgba(16,185,129,0.1) 0%, transparent 60%),
+      radial-gradient(ellipse 40% 40% at 60% 10%, rgba(139,92,246,0.1) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
   .pb-nav { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
 }
 
@@ -50,8 +77,10 @@
 
   /* Bottom nav */
   .bottom-nav {
-    @apply fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100
-           flex items-stretch z-50;
+    @apply fixed bottom-0 left-0 right-0 z-50 flex items-stretch;
+    background: rgba(255,255,255,0.97);
+    backdrop-filter: blur(12px);
+    border-top: 0.5px solid rgba(0,0,0,0.08);
     padding-bottom: env(safe-area-inset-bottom);
   }
   .nav-item {
@@ -63,7 +92,9 @@
 
   /* Sheet / modal */
   .sheet-backdrop {
-    @apply fixed inset-0 bg-black/40 z-40 flex items-end;
+    @apply fixed inset-0 z-40 flex items-end;
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(4px);
   }
   .sheet {
     @apply bg-white w-full rounded-t-3xl p-5 z-50 max-h-[90vh] overflow-y-auto;
@@ -72,19 +103,75 @@
     @apply w-10 h-1 bg-gray-200 rounded-full mx-auto mb-5;
   }
 
-  /* INR formatting helper */
   .inr::before { content: '₹'; @apply text-gray-400 mr-0.5; }
+}
 
-  /* Pull-to-refresh indicator */
-  .refresh-indicator {
-    @apply absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full
-           bg-brand-900 text-white text-xs px-3 py-1 rounded-b-lg;
+/* App frame — the phone-like container on desktop */
+.app-frame {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 430px;
+  min-height: 100vh;
+  margin: 0 auto;
+  background: #f8f9ff;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.08),
+    0 32px 80px rgba(0,0,0,0.5),
+    0 8px 24px rgba(0,0,0,0.3);
+}
+
+@media (min-width: 768px) {
+  .app-frame {
+    min-height: 100vh;
   }
 }
 
-/* Smooth page transitions */
+/* Page transitions */
 .page-enter { animation: slideUp 0.2s ease; }
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(12px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Desktop side decorations */
+@media (min-width: 768px) {
+  .desktop-deco-left,
+  .desktop-deco-right {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: calc((100vw - 430px) / 2);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 2rem;
+    z-index: 0;
+    pointer-events: none;
+  }
+  .desktop-deco-left  { left: 0; align-items: flex-end; text-align: right; }
+  .desktop-deco-right { right: 0; align-items: flex-start; }
+
+  .deco-label {
+    color: rgba(255,255,255,0.35);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .deco-value {
+    color: rgba(255,255,255,0.7);
+    font-size: 22px;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 20px;
+  }
+  .deco-divider {
+    width: 32px;
+    height: 1px;
+    background: rgba(255,255,255,0.15);
+    margin: 12px 0 12px auto;
+  }
+  .deco-right .deco-divider { margin: 12px 0; }
 }
