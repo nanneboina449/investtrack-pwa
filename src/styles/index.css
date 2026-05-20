@@ -175,3 +175,22 @@
   }
   .deco-right .deco-divider { margin: 12px 0; }
 }
+
+/* ── Standalone PWA: lock width, hide side decorations ─────── */
+@media (display-mode: standalone) {
+  body {
+    /* Keep the background but tighter */
+    background: #0f0c29;
+  }
+
+  /* Hide desktop side labels inside PWA window */
+  .desktop-deco-left,
+  .desktop-deco-right {
+    display: none !important;
+  }
+
+  .app-frame {
+    max-width: 100%;
+    box-shadow: none;
+  }
+}

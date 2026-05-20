@@ -13,11 +13,29 @@ export default defineConfig({
         short_name: 'InvestTrack',
         description: 'Track investments, profits, and loans across projects',
         theme_color: '#1a237e',
-        background_color: '#f8f9ff',
+        background_color: '#0f0c29',
         display: 'standalone',
+        display_override: ['window-controls-overlay', 'standalone'],
         orientation: 'portrait',
         scope: '/',
         start_url: '/',
+
+        // Preferred launch window size (Chrome on desktop respects this)
+        launch_handler: {
+          client_mode: 'navigate-existing'
+        },
+
+        // Window size hints for desktop
+        screenshots: [
+          {
+            src: 'icons/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            form_factor: 'narrow',
+            label: 'InvestTrack Dashboard'
+          }
+        ],
+
         icons: [
           { src: 'icons/icon-72.png',  sizes: '72x72',   type: 'image/png' },
           { src: 'icons/icon-96.png',  sizes: '96x96',   type: 'image/png' },
