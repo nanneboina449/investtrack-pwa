@@ -1,14 +1,10 @@
 // src/components/ui/index.jsx
-// Shared atomic components
-
 import { useState } from 'react'
 
 // ── Spinner ──────────────────────────────────────────────────
 export function Spinner({ size = 'md' }) {
   const s = size === 'sm' ? 'h-4 w-4' : size === 'lg' ? 'h-10 w-10' : 'h-6 w-6'
-  return (
-    <div className={`${s} border-2 border-brand-100 border-t-brand-900 rounded-full animate-spin`} />
-  )
+  return <div className={`${s} border-2 border-brand-100 border-t-brand-900 rounded-full animate-spin`} />
 }
 
 // ── Empty state ───────────────────────────────────────────────
@@ -24,20 +20,54 @@ export function Empty({ icon, title, sub, action }) {
 }
 
 // ── Sheet (bottom drawer) ─────────────────────────────────────
-export function Sheet({ open, onClose, title, children }) {
+// footer prop = sticky button area, always visible above keyboard
+export function Sheet({ open, onClose, title, children, footer }) {
   if (!open) return null
   return (
     <div className="sheet-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="sheet animate-slideUp">
-        <div className="sheet-handle" />
-        {title && (
-          <div className="flex items-center justify-between mb-5">
-            <h2 className="text-lg font-bold text-gray-900">{title}</h2>
-            <button onClick={onClose} className="text-gray-400 text-2xl leading-none">&times;</button>
+      <div className="sheet">
+        {/* Header */}
+        <div className="sheet-header">
+          <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4" />
+          {title && (
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-900">{title}</h2>
+              <button onClick={onClose}
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 text-gray-500 text-lg leading-none">
+                ×
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Scrollable content */}
+        <div className="sheet-scroll">
+          {children}
+        </div>
+
+        {/* Sticky footer — always above keyboard */}
+        {footer && (
+          <div className="sheet-footer">
+            {footer}
           </div>
         )}
-        {children}
       </div>
+    </div>
+  )
+}
+
+// ── Collapsible section ───────────────────────────────────────
+export function Collapsible({ label, icon = '⚙', defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="rounded-xl border border-gray-100 overflow-hidden">
+      <button type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 text-sm font-medium text-gray-600">
+        <span className="flex items-center gap-2">{icon} {label}</span>
+        <span className={`text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`}>▾</span>
+      </button>
+      {open && <div className="p-4 space-y-4">{children}</div>}
     </div>
   )
 }
@@ -81,17 +111,12 @@ export function ProgressBar({ value, max = 100, color = 'bg-brand-900', height =
 // ── Segmented control ─────────────────────────────────────────
 export function SegControl({ options, value, onChange }) {
   return (
-    <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+    <div className="flex bg-gray-100 rounded-xl p-1 gap-1 overflow-x-auto">
       {options.map(opt => (
-        <button
-          key={opt.value}
-          onClick={() => onChange(opt.value)}
-          className={`flex-1 py-1.5 px-3 rounded-lg text-sm font-medium transition-all ${
-            value === opt.value
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-500'
-          }`}
-        >
+        <button key={opt.value} onClick={() => onChange(opt.value)}
+          className={`flex-shrink-0 py-1.5 px-3 rounded-lg text-xs font-medium transition-all whitespace-nowrap ${
+            value === opt.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'
+          }`}>
           {opt.label}
         </button>
       ))}
@@ -105,29 +130,21 @@ const COLORS = ['#1565c0','#e65100','#4527a0','#00695c','#ad1457','#558b2f','#6a
 export function ShareBar({ investors = [] }) {
   const total = investors.reduce((s, i) => s + (i.share_percent ?? 0), 0)
   const remaining = Math.max(0, 100 - total)
-
   return (
     <div>
       <div className="flex h-3 rounded-full overflow-hidden gap-px">
         {investors.map((inv, idx) => (
-          <div
-            key={inv.investor_id ?? idx}
+          <div key={inv.investor_id ?? idx}
             style={{ width: `${inv.share_percent}%`, background: COLORS[idx % COLORS.length] }}
-            title={`${inv.investor_name}: ${inv.share_percent}%`}
-          />
+            title={`${inv.investor_name}: ${inv.share_percent}%`} />
         ))}
-        {remaining > 0 && (
-          <div style={{ width: `${remaining}%` }} className="bg-gray-100" />
-        )}
+        {remaining > 0 && <div style={{ width: `${remaining}%` }} className="bg-gray-100" />}
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
         {investors.map((inv, idx) => (
           <div key={inv.investor_id ?? idx} className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full flex-shrink-0"
-              style={{ background: COLORS[idx % COLORS.length] }} />
-            <span className="text-xs text-gray-500">
-              {inv.investor_name} · {inv.share_percent}%
-            </span>
+            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: COLORS[idx % COLORS.length] }} />
+            <span className="text-xs text-gray-500">{inv.investor_name} · {inv.share_percent}%</span>
           </div>
         ))}
         {remaining > 0 && (
@@ -152,7 +169,7 @@ export function Field({ label, error, children }) {
   )
 }
 
-// ── Toast notification ────────────────────────────────────────
+// ── Toast ─────────────────────────────────────────────────────
 export function useToast() {
   const [toast, setToast] = useState(null)
   const show = (msg, type = 'success') => {
@@ -160,7 +177,8 @@ export function useToast() {
     setTimeout(() => setToast(null), 3000)
   }
   const Toast = () => toast ? (
-    <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg transition-all
+    <div className={`fixed z-50 px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg
+      top-4 left-1/2 -translate-x-1/2 transition-all
       ${toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
       {toast.msg}
     </div>

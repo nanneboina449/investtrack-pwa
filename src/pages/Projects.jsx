@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProjects, createProject } from '../hooks/useData'
 import { inr, isoDate } from '../lib/supabase'
-import { Sheet, Field, Empty, Spinner, SegControl, useToast } from '../components/ui'
+import { Sheet, Field, Empty, Spinner, SegControl, useToast, Collapsible } from '../components/ui'
 
 export default function Projects() {
   const { data: projects, loading, reload } = useProjects()

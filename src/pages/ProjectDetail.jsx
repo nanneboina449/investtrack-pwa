@@ -7,7 +7,7 @@ import {
 } from '../hooks/useData'
 import { useMyRole } from '../hooks/useSharing'
 import { inr, pct, isoDate, supabase } from '../lib/supabase'
-import { Sheet, Field, ShareBar, ProgressBar, SegControl, Spinner, Empty, useToast } from '../components/ui'
+import { Sheet, Field, ShareBar, ProgressBar, SegControl, Spinner, Empty, useToast, Collapsible } from '../components/ui'
 import ShareModal from '../components/ShareModal'
 
 export default function ProjectDetail() {
@@ -376,8 +376,6 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
           </Field>
         </div>
         <Field label="Notes"><textarea className="input resize-none" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)} /></Field>
-        {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
-        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Adding…' : 'Add Investor'}</button>
       </form>
     </Sheet>
   )
@@ -400,13 +398,25 @@ function AddProfitSheet({ open, onClose, projectId, onSaved }) {
   }
 
   return (
-    <Sheet open={open} onClose={onClose} title="Record Profit">
+    <Sheet open={open} onClose={onClose} title="Record Profit"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>
+            {saving ? 'Saving…' : 'Record Profit'}
+          </button>
+        </div>
+      }>
       <form onSubmit={submit} className="space-y-4">
-        <Field label="Profit Amount (₹) *"><input className="input" type="number" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} required /></Field>
-        <Field label="Date"><input className="input" type="date" value={form.record_date} onChange={e => set('record_date', e.target.value)} /></Field>
-        <Field label="Notes"><textarea className="input resize-none" rows={2} placeholder="e.g. Q1 rental income" value={form.notes} onChange={e => set('notes', e.target.value)} /></Field>
-        {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
-        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Record Profit'}</button>
+        <Field label="Profit Amount (₹) *">
+          <input className="input" type="number" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} required autoFocus />
+        </Field>
+        <Field label="Date">
+          <input className="input" type="date" value={form.record_date} onChange={e => set('record_date', e.target.value)} />
+        </Field>
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2} placeholder="e.g. Q1 rental income" value={form.notes} onChange={e => set('notes', e.target.value)} />
+        </Field>
       </form>
     </Sheet>
   )
@@ -460,7 +470,17 @@ function AddExpenseSheet({ open, onClose, projectId, onSaved }) {
   }
 
   return (
-    <Sheet open={open} onClose={onClose} title="Add Expense">
+    <Sheet open={open} onClose={onClose} title="Add Expense"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit}
+            className="btn-primary w-full" disabled={saving}
+            style={{ background: '#dc2626' }}>
+            {saving ? 'Saving…' : 'Record Expense'}
+          </button>
+        </div>
+      }>
       <form onSubmit={submit} className="space-y-4">
 
         <Field label="Category">
@@ -498,12 +518,6 @@ function AddExpenseSheet({ open, onClose, projectId, onSaved }) {
             value={form.notes} onChange={e => set('notes', e.target.value)} />
         </Field>
 
-        {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
-
-        <button type="submit" className="btn-primary w-full" disabled={saving}
-          style={{ background: '#dc2626' }}>
-          {saving ? 'Saving…' : 'Record Expense'}
-        </button>
       </form>
     </Sheet>
   )
