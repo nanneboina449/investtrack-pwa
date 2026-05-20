@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { -webkit-tap-highlight-color: transparent; }
+
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* Safe area for notched phones */
+  .safe-bottom { padding-bottom: calc(env(safe-area-inset-bottom) + 4rem); }
+  .pb-nav { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-2xl border border-gray-100 shadow-sm;
+  }
+  .btn-primary {
+    @apply bg-brand-900 text-white font-semibold rounded-xl px-5 py-3
+           active:scale-95 transition-transform disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-outline {
+    @apply border border-brand-900 text-brand-900 font-semibold rounded-xl px-5 py-3
+           active:scale-95 transition-transform;
+  }
+  .btn-ghost {
+    @apply text-gray-500 font-medium rounded-xl px-4 py-2
+           hover:bg-gray-100 active:scale-95 transition-all;
+  }
+  .input {
+    @apply w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm
+           focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent
+           placeholder:text-gray-400;
+  }
+  .label {
+    @apply text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 block;
+  }
+  .badge {
+    @apply text-xs font-semibold px-2.5 py-0.5 rounded-full;
+  }
+  .badge-active   { @apply badge bg-emerald-50 text-emerald-800; }
+  .badge-upcoming { @apply badge bg-blue-50 text-blue-800; }
+  .badge-completed{ @apply badge bg-gray-100 text-gray-600; }
+
+  .mono { @apply font-mono; }
+
+  /* Bottom nav */
+  .bottom-nav {
+    @apply fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100
+           flex items-stretch z-50;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .nav-item {
+    @apply flex-1 flex flex-col items-center justify-center gap-0.5 py-2
+           text-gray-400 text-[10px] font-medium cursor-pointer
+           active:bg-gray-50 transition-colors;
+  }
+  .nav-item.active { @apply text-brand-900; }
+
+  /* Sheet / modal */
+  .sheet-backdrop {
+    @apply fixed inset-0 bg-black/40 z-40 flex items-end;
+  }
+  .sheet {
+    @apply bg-white w-full rounded-t-3xl p-5 z-50 max-h-[90vh] overflow-y-auto;
+  }
+  .sheet-handle {
+    @apply w-10 h-1 bg-gray-200 rounded-full mx-auto mb-5;
+  }
+
+  /* INR formatting helper */
+  .inr::before { content: '₹'; @apply text-gray-400 mr-0.5; }
+
+  /* Pull-to-refresh indicator */
+  .refresh-indicator {
+    @apply absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full
+           bg-brand-900 text-white text-xs px-3 py-1 rounded-b-lg;
+  }
+}
+
+/* Smooth page transitions */
+.page-enter { animation: slideUp 0.2s ease; }
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

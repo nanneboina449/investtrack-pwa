@@ -1,0 +1,351 @@
+// src/pages/ProjectDetail.jsx
+import { useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import {
+  useInvestors, useInvestorBalances, useProfitRecords,
+  createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord
+} from '../hooks/useData'
+import { inr, pct, isoDate } from '../lib/supabase'
+import { Sheet, Field, ShareBar, ProgressBar, SegControl, Spinner, Empty, useToast } from '../components/ui'
+
+export default function ProjectDetail() {
+  const { id } = useParams()
+  const navigate = useNavigate()
+  const [tab, setTab] = useState('investors')
+  const { show, Toast } = useToast()
+
+  const investors = useInvestors(id)
+  const balances  = useInvestorBalances(id)
+  const profits   = useProfitRecords(id)
+
+  const [showAddInv, setShowAddInv]     = useState(false)
+  const [showAddProfit, setShowAddProfit] = useState(false)
+
+  const totalShare  = investors.data.reduce((s, i) => s + (i.share_percent ?? 0), 0)
+  const totalProfit = profits.data.reduce((s, p) => s + (p.amount ?? 0), 0)
+
+  // Get project name from first investor or URL
+  const projectName = investors.data[0]?.project_name ?? 'Project'
+  const projectValue = investors.data[0]?.total_value ?? 0
+
+  const handleDeleteInvestor = async (invId) => {
+    if (!confirm('Remove this investor?')) return
+    try {
+      await deleteInvestor(invId)
+      investors.reload()
+      show('Investor removed')
+    } catch (e) { show(e.message, 'error') }
+  }
+
+  const handleDeleteProfit = async (pid) => {
+    if (!confirm('Delete this profit record?')) return
+    try {
+      await deleteProfitRecord(pid)
+      profits.reload()
+      show('Profit record deleted')
+    } catch (e) { show(e.message, 'error') }
+  }
+
+  return (
+    <div className="page-enter">
+      <Toast />
+
+      {/* Header */}
+      <div className="bg-brand-900 text-white px-5 pt-12 pb-5">
+        <button onClick={() => navigate(-1)} className="text-brand-100 text-sm mb-3 flex items-center gap-1">
+          ← Back
+        </button>
+        <h1 className="text-xl font-bold mb-4">{projectName}</h1>
+        <div className="grid grid-cols-3 gap-2">
+          <div className="bg-white/10 rounded-xl p-2.5 text-center">
+            <p className="text-brand-100 text-[10px] mb-0.5">Total Value</p>
+            <p className="font-bold mono text-xs">{inr(projectValue)}</p>
+          </div>
+          <div className="bg-white/10 rounded-xl p-2.5 text-center">
+            <p className="text-brand-100 text-[10px] mb-0.5">Total Profit</p>
+            <p className={`font-bold mono text-xs ${totalProfit >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+              {inr(totalProfit)}
+            </p>
+          </div>
+          <div className="bg-white/10 rounded-xl p-2.5 text-center">
+            <p className="text-brand-100 text-[10px] mb-0.5">Share Filled</p>
+            <p className={`font-bold text-xs ${totalShare >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>
+              {totalShare.toFixed(1)}%
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Share bar */}
+      {investors.data.length > 0 && (
+        <div className="mx-4 mt-4 card p-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Share Allocation</p>
+          <ShareBar investors={investors.data} />
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="px-4 mt-4">
+        <SegControl
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'investors', label: `Investors (${investors.data.length})` },
+            { value: 'profits',   label: 'Profit History' },
+            { value: 'balances',  label: 'Balances' },
+          ]}
+        />
+      </div>
+
+      <div className="px-4 py-4 space-y-3">
+
+        {/* ── INVESTORS TAB ── */}
+        {tab === 'investors' && (
+          <>
+            <div className="flex justify-between items-center">
+              <p className="text-sm text-gray-500">{totalShare < 100 ? `${(100-totalShare).toFixed(1)}% unallocated` : 'Fully allocated'}</p>
+              {totalShare < 100 && (
+                <button onClick={() => setShowAddInv(true)} className="btn-primary text-xs px-3 py-2">
+                  + Investor
+                </button>
+              )}
+            </div>
+            {investors.loading ? <Spinner /> : investors.data.length === 0 ? (
+              <Empty icon="👥" title="No investors yet"
+                action={<button onClick={() => setShowAddInv(true)} className="btn-primary text-sm px-5 py-2.5">Add First Investor</button>} />
+            ) : (
+              investors.data.map(inv => (
+                <div key={inv.investor_id} className="card p-4">
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <p className="font-semibold text-gray-900">{inv.investor_name}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{inv.share_percent}% share</p>
+                    </div>
+                    <button onClick={() => handleDeleteInvestor(inv.investor_id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">×</button>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1 text-center border-t border-gray-50 pt-3">
+                    {[
+                      { l: 'Invested', v: inr(inv.amount_invested) },
+                      { l: 'Profit',   v: inr(inv.total_profit_allocated ?? 0), g: true },
+                      { l: 'Value',    v: inr(inv.current_value ?? inv.amount_invested) },
+                      { l: 'ROI',      v: pct(inv.amount_invested > 0 ? ((inv.total_profit_allocated??0)/inv.amount_invested)*100 : 0), g: true },
+                    ].map(({ l, v, g }) => (
+                      <div key={l}>
+                        <p className={`text-xs font-bold mono ${g && (inv.total_profit_allocated??0)>=0 ? 'text-emerald-600' : 'text-gray-800'}`}>{v}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">{l}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+          </>
+        )}
+
+        {/* ── PROFIT HISTORY TAB ── */}
+        {tab === 'profits' && (
+          <>
+            <div className="flex justify-end">
+              <button onClick={() => setShowAddProfit(true)} className="btn-primary text-xs px-3 py-2">
+                + Record Profit
+              </button>
+            </div>
+            {profits.loading ? <Spinner /> : profits.data.length === 0 ? (
+              <Empty icon="💰" title="No profit records"
+                action={<button onClick={() => setShowAddProfit(true)} className="btn-primary text-sm px-5 py-2.5">Add First Record</button>} />
+            ) : (
+              profits.data.map(rec => (
+                <div key={rec.id} className="card p-4">
+                  <div className="flex justify-between items-center mb-3">
+                    <div>
+                      <p className="font-bold text-emerald-600 mono">{inr(rec.amount)}</p>
+                      {rec.notes && <p className="text-xs text-gray-400 mt-0.5">{rec.notes}</p>}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-gray-400">{new Date(rec.record_date).toLocaleDateString('en-IN')}</p>
+                      <button onClick={() => handleDeleteProfit(rec.id)} className="text-xs text-red-400 mt-1">delete</button>
+                    </div>
+                  </div>
+                  {/* Per-investor split */}
+                  <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Distributed to</p>
+                    {investors.data.map(inv => (
+                      <div key={inv.investor_id} className="flex justify-between text-xs">
+                        <span className="text-gray-500">{inv.investor_name} ({inv.share_percent}%)</span>
+                        <span className="font-semibold text-emerald-600 mono">
+                          {inr(rec.amount * inv.share_percent / 100)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+          </>
+        )}
+
+        {/* ── RUNNING BALANCES TAB ── */}
+        {tab === 'balances' && (
+          <>
+            <p className="text-xs text-gray-400">Running totals: invested + profit − loaned out + repaid</p>
+            {balances.loading ? <Spinner /> : balances.data.length === 0 ? (
+              <Empty icon="⚖️" title="No balance data" sub="Add investors first" />
+            ) : (
+              balances.data.map(b => {
+                const effective = b.amount_invested + b.profit_allocated - b.money_loaned_out + b.money_repaid_received + b.money_moved_to_projects
+                return (
+                  <div key={b.investor_id} className="card p-4">
+                    <div className="flex justify-between items-center mb-3">
+                      <div>
+                        <p className="font-semibold text-gray-900">{b.investor_name}</p>
+                        <p className="text-xs text-gray-400">{b.share_percent}% share</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-emerald-600 mono">{inr(effective)}</p>
+                        <p className="text-[10px] text-gray-400">effective balance</p>
+                      </div>
+                    </div>
+                    <div className="space-y-1.5 text-xs border-t border-gray-50 pt-3">
+                      {[
+                        { l: 'Amount invested',         v: inr(b.amount_invested),         c: 'text-gray-700' },
+                        { l: '+ Profit allocated',      v: `+${inr(b.profit_allocated)}`,   c: 'text-emerald-600' },
+                        { l: '− Loaned out',            v: `-${inr(b.money_loaned_out)}`,   c: 'text-red-500' },
+                        { l: '+ Repaid received',       v: `+${inr(b.money_repaid_received)}`, c: 'text-emerald-600' },
+                        { l: '+ Moved to projects',     v: `+${inr(b.money_moved_to_projects)}`, c: 'text-blue-600' },
+                      ].map(({ l, v, c }) => (
+                        <div key={l} className="flex justify-between">
+                          <span className="text-gray-400">{l}</span>
+                          <span className={`font-semibold mono ${c}`}>{v}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between border-t border-gray-100 pt-1.5 mt-1">
+                        <span className="font-semibold text-gray-600">= Effective balance</span>
+                        <span className="font-bold mono text-emerald-600">{inr(effective)}</span>
+                      </div>
+                    </div>
+                    {b.money_loaned_out > 0 && (
+                      <div className="mt-3">
+                        <p className="text-[10px] text-gray-400 mb-1">Capital deployed in loans</p>
+                        <ProgressBar value={b.money_loaned_out} max={b.amount_invested} color="bg-red-400" />
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Add Investor Sheet */}
+      <AddInvestorSheet
+        open={showAddInv}
+        onClose={() => setShowAddInv(false)}
+        projectId={id}
+        projectValue={projectValue}
+        remainingShare={100 - totalShare}
+        onSaved={() => { setShowAddInv(false); investors.reload(); balances.reload(); show('Investor added!') }}
+      />
+
+      {/* Add Profit Sheet */}
+      <AddProfitSheet
+        open={showAddProfit}
+        onClose={() => setShowAddProfit(false)}
+        projectId={id}
+        onSaved={() => { setShowAddProfit(false); profits.reload(); investors.reload(); show('Profit recorded!') }}
+      />
+    </div>
+  )
+}
+
+// ── Add Investor Sheet ────────────────────────────────────────
+function AddInvestorSheet({ open, onClose, projectId, projectValue, remainingShare, onSaved }) {
+  const [form, setForm]   = useState({ name: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
+  const [autoAmt, setAutoAmt] = useState(true)
+  const [saving, setSaving]   = useState(false)
+  const [error, setError]     = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const handleShare = (v) => {
+    set('share_percent', v)
+    if (autoAmt && projectValue) set('amount_invested', ((parseFloat(v)||0) * projectValue / 100).toFixed(0))
+  }
+
+  const submit = async (e) => {
+    e.preventDefault()
+    const pct = parseFloat(form.share_percent)
+    if (pct <= 0 || pct > remainingShare) { setError(`Share must be between 0 and ${remainingShare.toFixed(1)}%`); return }
+    setSaving(true); setError(null)
+    try {
+      await createInvestor({ project_id: projectId, name: form.name, phone: form.phone || null, share_percent: pct, amount_invested: parseFloat(form.amount_invested), notes: form.notes || null })
+      setForm({ name: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Add Investor">
+      <form onSubmit={submit} className="space-y-4">
+        <Field label="Full Name *">
+          <input className="input" placeholder="Investor name" value={form.name} onChange={e => set('name', e.target.value)} required />
+        </Field>
+        <Field label="Phone">
+          <input className="input" type="tel" placeholder="+91 98765 43210" value={form.phone} onChange={e => set('phone', e.target.value)} />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label={`Share % (max ${remainingShare.toFixed(1)}%)`}>
+            <input className="input" type="number" step="0.01" max={remainingShare} placeholder="25" value={form.share_percent} onChange={e => handleShare(e.target.value)} required />
+          </Field>
+          <Field label="Amount (₹)">
+            <input className="input" type="number" placeholder="0" value={form.amount_invested}
+              onChange={e => { setAutoAmt(false); set('amount_invested', e.target.value) }} required />
+          </Field>
+        </div>
+        {autoAmt && form.share_percent && (
+          <p className="text-xs text-gray-400 -mt-2">Auto-computed from project value · {inr(parseFloat(form.amount_invested||0))}</p>
+        )}
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2} placeholder="Optional" value={form.notes} onChange={e => set('notes', e.target.value)} />
+        </Field>
+        {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Adding…' : 'Add Investor'}</button>
+      </form>
+    </Sheet>
+  )
+}
+
+// ── Add Profit Sheet ──────────────────────────────────────────
+function AddProfitSheet({ open, onClose, projectId, onSaved }) {
+  const [form, setForm] = useState({ amount: '', record_date: isoDate(), notes: '' })
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setSaving(true); setError(null)
+    try {
+      await createProfitRecord({ project_id: projectId, amount: parseFloat(form.amount), record_date: form.record_date, notes: form.notes || null })
+      setForm({ amount: '', record_date: isoDate(), notes: '' })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Record Profit">
+      <form onSubmit={submit} className="space-y-4">
+        <Field label="Profit Amount (₹) *">
+          <input className="input" type="number" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} required />
+        </Field>
+        <Field label="Date">
+          <input className="input" type="date" value={form.record_date} onChange={e => set('record_date', e.target.value)} />
+        </Field>
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2} placeholder="e.g. Q1 rental income" value={form.notes} onChange={e => set('notes', e.target.value)} />
+        </Field>
+        {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Record Profit'}</button>
+      </form>
+    </Sheet>
+  )
+}
