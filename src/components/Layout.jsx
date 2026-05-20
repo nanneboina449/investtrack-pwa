@@ -16,8 +16,8 @@ export default function Layout({ children }) {
         <div className="deco-label">Portfolio</div>
         <div className="deco-value">InvestTrack</div>
         <div className="deco-divider" />
-        <div className="deco-label">Powered by</div>
-        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12, fontWeight: 500 }}>Supabase + Vercel</div>
+        <div className="deco-label">Built by</div>
+        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12, fontWeight: 500 }}>Vishwa Technologies Ltd</div>
       </div>
 
       <div className="desktop-deco-right" aria-hidden="true">
