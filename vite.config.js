@@ -11,7 +11,7 @@ export default defineConfig({
       manifest: {
         name: 'InvestTrack',
         short_name: 'InvestTrack',
-        description: 'Track investments, profits, and loans across projects',
+        description: 'Track investments, profits, and loans — by Vishwa Technologies Ltd',
         theme_color: '#1a237e',
         background_color: '#0f0c29',
         display: 'standalone',
@@ -19,23 +19,10 @@ export default defineConfig({
         orientation: 'portrait',
         scope: '/',
         start_url: '/',
-
-        // Preferred launch window size (Chrome on desktop respects this)
-        launch_handler: {
-          client_mode: 'navigate-existing'
-        },
-
-        // Window size hints for desktop
+        launch_handler: { client_mode: 'navigate-existing' },
         screenshots: [
-          {
-            src: 'icons/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            form_factor: 'narrow',
-            label: 'InvestTrack Dashboard'
-          }
+          { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', form_factor: 'narrow', label: 'InvestTrack Dashboard' }
         ],
-
         icons: [
           { src: 'icons/icon-72.png',  sizes: '72x72',   type: 'image/png' },
           { src: 'icons/icon-96.png',  sizes: '96x96',   type: 'image/png' },
@@ -50,12 +37,17 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // Force claim clients immediately on new SW activation
+        clientsClaim: true,
+        skipWaiting: true,
+        // Change cache name to bust old caches
+        cacheId: 'investtrack-v1.2.0',
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
             handler: 'NetworkFirst',
             options: {
-              cacheName: 'supabase-cache',
+              cacheName: 'supabase-v1.2.0',
               networkTimeoutSeconds: 10,
               cacheableResponse: { statuses: [0, 200] }
             }
