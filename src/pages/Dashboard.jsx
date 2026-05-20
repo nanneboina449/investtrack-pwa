@@ -1,19 +1,25 @@
 // src/pages/Dashboard.jsx
 import { useNavigate } from 'react-router-dom'
 import { useDashboard } from '../hooks/useData'
+import { acceptPendingInvites } from '../hooks/useSharing'
 import { inr, pct } from '../lib/supabase'
 import { StatCard, Spinner, Empty } from '../components/ui'
+import InviteBanner from '../components/InviteBanner'
+import { useEffect } from 'react'
 
 export default function Dashboard() {
   const { summary, projects, loading } = useDashboard()
   const navigate = useNavigate()
+
+  // Auto-accept any pending invites when user lands on dashboard
+  useEffect(() => { acceptPendingInvites() }, [])
 
   const active   = projects.data.filter(p => p.status === 'active')
   const upcoming = projects.data.filter(p => p.status === 'upcoming')
 
   return (
     <div className="page-enter">
-      {/* Header banner */}
+      {/* Portfolio banner */}
       <div className="bg-brand-900 text-white px-5 pt-14 pb-8">
         <p className="text-brand-100 text-sm mb-1">Total Portfolio Value</p>
         <p className="text-4xl font-bold mono mb-6">{inr(summary.totalValue)}</p>
@@ -35,27 +41,26 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Pending invites */}
+      <InviteBanner />
+
       <div className="px-4 py-5 space-y-6">
         {loading ? (
           <div className="flex justify-center py-10"><Spinner size="lg" /></div>
         ) : (
           <>
-            {/* Quick stats */}
             <div className="grid grid-cols-2 gap-3">
-              <StatCard icon="🚀" label="Active Projects"   value={summary.activeProjects}   color="green" />
-              <StatCard icon="⏳" label="Upcoming"          value={summary.upcomingProjects} color="blue" />
-              <StatCard icon="↗" label="Loans Given"        value={inr(summary.loansGiven)}   color="orange" />
-              <StatCard icon="↙" label="Loans Received"     value={inr(summary.loansReceived)} color="purple" />
+              <StatCard icon="🚀" label="Active Projects"  value={summary.activeProjects}   color="green" />
+              <StatCard icon="⏳" label="Upcoming"         value={summary.upcomingProjects} color="blue" />
+              <StatCard icon="↗"  label="Loans Given"      value={inr(summary.loansGiven)}   color="orange" />
+              <StatCard icon="↙"  label="Loans Received"   value={inr(summary.loansReceived)} color="purple" />
             </div>
 
-            {/* Active projects */}
             {active.length > 0 && (
               <section>
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="font-bold text-gray-900">Active Projects</h2>
-                  <button onClick={() => navigate('/projects')} className="text-xs text-brand-900 font-medium">
-                    View all →
-                  </button>
+                  <button onClick={() => navigate('/projects')} className="text-xs text-brand-900 font-medium">View all →</button>
                 </div>
                 <div className="space-y-3">
                   {active.map(p => <ProjectCard key={p.id} project={p} />)}
@@ -63,7 +68,6 @@ export default function Dashboard() {
               </section>
             )}
 
-            {/* Upcoming projects */}
             {upcoming.length > 0 && (
               <section>
                 <h2 className="font-bold text-gray-900 mb-3">Upcoming Projects</h2>
@@ -74,16 +78,8 @@ export default function Dashboard() {
             )}
 
             {active.length === 0 && upcoming.length === 0 && (
-              <Empty
-                icon="📊"
-                title="No projects yet"
-                sub="Create your first investment project to get started"
-                action={
-                  <button onClick={() => navigate('/projects')} className="btn-primary text-sm px-6 py-2.5">
-                    Add Project
-                  </button>
-                }
-              />
+              <Empty icon="📊" title="No projects yet" sub="Create your first investment project"
+                action={<button onClick={() => navigate('/projects')} className="btn-primary text-sm px-6 py-2.5">Add Project</button>} />
             )}
           </>
         )}
@@ -102,14 +98,17 @@ function ProjectCard({ project }) {
       onClick={() => navigate(`/projects/${project.id}`)}>
       <div className="flex justify-between items-start mb-3">
         <div className="flex-1 min-w-0">
-          <p className="font-semibold text-gray-900 truncate">{project.name}</p>
-          {project.description && (
-            <p className="text-xs text-gray-400 mt-0.5 truncate">{project.description}</p>
-          )}
+          <div className="flex items-center gap-2">
+            <p className="font-semibold text-gray-900 truncate">{project.name}</p>
+            {project.my_role && project.my_role !== 'owner' && (
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 flex-shrink-0">
+                {project.my_role}
+              </span>
+            )}
+          </div>
+          {project.description && <p className="text-xs text-gray-400 mt-0.5 truncate">{project.description}</p>}
         </div>
-        <span className={`badge-${project.status} ml-2 flex-shrink-0`}>
-          {project.status}
-        </span>
+        <span className={`badge-${project.status} ml-2 flex-shrink-0`}>{project.status}</span>
       </div>
       <div className="grid grid-cols-4 gap-1 text-center border-t border-gray-50 pt-3">
         {[

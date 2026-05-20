@@ -29,7 +29,7 @@ function useFetch(fetcher, deps = []) {
 export function useProjects() {
   return useFetch(async () => {
     const { data, error } = await supabase
-      .from('project_summary')
+      .from('my_projects')
       .select('*')
       .order('created_at', { ascending: false })
     if (error) throw error

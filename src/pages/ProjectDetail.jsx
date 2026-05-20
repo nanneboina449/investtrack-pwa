@@ -5,45 +5,48 @@ import {
   useInvestors, useInvestorBalances, useProfitRecords,
   createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord
 } from '../hooks/useData'
-import { inr, pct, isoDate } from '../lib/supabase'
+import { useMyRole } from '../hooks/useSharing'
+import { inr, pct, isoDate, supabase } from '../lib/supabase'
 import { Sheet, Field, ShareBar, ProgressBar, SegControl, Spinner, Empty, useToast } from '../components/ui'
+import ShareModal from '../components/ShareModal'
 
 export default function ProjectDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [tab, setTab] = useState('investors')
   const { show, Toast } = useToast()
+  const [showShare, setShowShare] = useState(false)
 
   const investors = useInvestors(id)
   const balances  = useInvestorBalances(id)
   const profits   = useProfitRecords(id)
 
-  const [showAddInv, setShowAddInv]     = useState(false)
+  const [showAddInv, setShowAddInv]       = useState(false)
   const [showAddProfit, setShowAddProfit] = useState(false)
+
+  // Determine current user's role
+  const [project, setProject] = useState(null)
+  useState(() => {
+    supabase.from('my_projects').select('*').eq('id', id).single()
+      .then(({ data }) => setProject(data))
+  })
+  const { isOwner, canEdit } = useMyRole(id, project?.is_owner)
 
   const totalShare  = investors.data.reduce((s, i) => s + (i.share_percent ?? 0), 0)
   const totalProfit = profits.data.reduce((s, p) => s + (p.amount ?? 0), 0)
-
-  // Get project name from first investor or URL
-  const projectName = investors.data[0]?.project_name ?? 'Project'
-  const projectValue = investors.data[0]?.total_value ?? 0
+  const projectName  = project?.name ?? investors.data[0]?.project_name ?? 'Project'
+  const projectValue = project?.total_value ?? investors.data[0]?.total_value ?? 0
 
   const handleDeleteInvestor = async (invId) => {
     if (!confirm('Remove this investor?')) return
-    try {
-      await deleteInvestor(invId)
-      investors.reload()
-      show('Investor removed')
-    } catch (e) { show(e.message, 'error') }
+    try { await deleteInvestor(invId); investors.reload(); show('Investor removed') }
+    catch (e) { show(e.message, 'error') }
   }
 
   const handleDeleteProfit = async (pid) => {
     if (!confirm('Delete this profit record?')) return
-    try {
-      await deleteProfitRecord(pid)
-      profits.reload()
-      show('Profit record deleted')
-    } catch (e) { show(e.message, 'error') }
+    try { await deleteProfitRecord(pid); profits.reload(); show('Profit record deleted') }
+    catch (e) { show(e.message, 'error') }
   }
 
   return (
@@ -52,9 +55,15 @@ export default function ProjectDetail() {
 
       {/* Header */}
       <div className="bg-brand-900 text-white px-5 pt-12 pb-5">
-        <button onClick={() => navigate(-1)} className="text-brand-100 text-sm mb-3 flex items-center gap-1">
-          ← Back
-        </button>
+        <div className="flex justify-between items-center mb-3">
+          <button onClick={() => navigate(-1)} className="text-brand-100 text-sm flex items-center gap-1">← Back</button>
+          {isOwner && (
+            <button onClick={() => setShowShare(true)}
+              className="flex items-center gap-1.5 text-sm font-semibold bg-white/15 px-3 py-1.5 rounded-xl active:scale-95 transition-transform">
+              <span>👥</span> Share
+            </button>
+          )}
+        </div>
         <h1 className="text-xl font-bold mb-4">{projectName}</h1>
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-white/10 rounded-xl p-2.5 text-center">
@@ -63,18 +72,23 @@ export default function ProjectDetail() {
           </div>
           <div className="bg-white/10 rounded-xl p-2.5 text-center">
             <p className="text-brand-100 text-[10px] mb-0.5">Total Profit</p>
-            <p className={`font-bold mono text-xs ${totalProfit >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
-              {inr(totalProfit)}
-            </p>
+            <p className={`font-bold mono text-xs ${totalProfit >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{inr(totalProfit)}</p>
           </div>
           <div className="bg-white/10 rounded-xl p-2.5 text-center">
             <p className="text-brand-100 text-[10px] mb-0.5">Share Filled</p>
-            <p className={`font-bold text-xs ${totalShare >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>
-              {totalShare.toFixed(1)}%
-            </p>
+            <p className={`font-bold text-xs ${totalShare >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>{totalShare.toFixed(1)}%</p>
           </div>
         </div>
       </div>
+
+      {/* Role badge for non-owners */}
+      {!isOwner && project && (
+        <div className="mx-4 mt-3">
+          <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-purple-50 text-purple-700">
+            Your role: {project.my_role}
+          </span>
+        </div>
+      )}
 
       {/* Share bar */}
       {investors.data.length > 0 && (
@@ -86,33 +100,27 @@ export default function ProjectDetail() {
 
       {/* Tabs */}
       <div className="px-4 mt-4">
-        <SegControl
-          value={tab}
-          onChange={setTab}
-          options={[
-            { value: 'investors', label: `Investors (${investors.data.length})` },
-            { value: 'profits',   label: 'Profit History' },
-            { value: 'balances',  label: 'Balances' },
-          ]}
-        />
+        <SegControl value={tab} onChange={setTab} options={[
+          { value: 'investors', label: `Investors (${investors.data.length})` },
+          { value: 'profits',   label: 'Profit History' },
+          { value: 'balances',  label: 'Balances' },
+        ]} />
       </div>
 
       <div className="px-4 py-4 space-y-3">
 
-        {/* ── INVESTORS TAB ── */}
+        {/* INVESTORS TAB */}
         {tab === 'investors' && (
           <>
             <div className="flex justify-between items-center">
               <p className="text-sm text-gray-500">{totalShare < 100 ? `${(100-totalShare).toFixed(1)}% unallocated` : 'Fully allocated'}</p>
-              {totalShare < 100 && (
-                <button onClick={() => setShowAddInv(true)} className="btn-primary text-xs px-3 py-2">
-                  + Investor
-                </button>
+              {canEdit && totalShare < 100 && (
+                <button onClick={() => setShowAddInv(true)} className="btn-primary text-xs px-3 py-2">+ Investor</button>
               )}
             </div>
             {investors.loading ? <Spinner /> : investors.data.length === 0 ? (
               <Empty icon="👥" title="No investors yet"
-                action={<button onClick={() => setShowAddInv(true)} className="btn-primary text-sm px-5 py-2.5">Add First Investor</button>} />
+                action={canEdit && <button onClick={() => setShowAddInv(true)} className="btn-primary text-sm px-5 py-2.5">Add First Investor</button>} />
             ) : (
               investors.data.map(inv => (
                 <div key={inv.investor_id} className="card p-4">
@@ -121,7 +129,9 @@ export default function ProjectDetail() {
                       <p className="font-semibold text-gray-900">{inv.investor_name}</p>
                       <p className="text-xs text-gray-400 mt-0.5">{inv.share_percent}% share</p>
                     </div>
-                    <button onClick={() => handleDeleteInvestor(inv.investor_id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">×</button>
+                    {isOwner && (
+                      <button onClick={() => handleDeleteInvestor(inv.investor_id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">×</button>
+                    )}
                   </div>
                   <div className="grid grid-cols-4 gap-1 text-center border-t border-gray-50 pt-3">
                     {[
@@ -142,17 +152,17 @@ export default function ProjectDetail() {
           </>
         )}
 
-        {/* ── PROFIT HISTORY TAB ── */}
+        {/* PROFIT HISTORY TAB */}
         {tab === 'profits' && (
           <>
-            <div className="flex justify-end">
-              <button onClick={() => setShowAddProfit(true)} className="btn-primary text-xs px-3 py-2">
-                + Record Profit
-              </button>
-            </div>
+            {canEdit && (
+              <div className="flex justify-end">
+                <button onClick={() => setShowAddProfit(true)} className="btn-primary text-xs px-3 py-2">+ Record Profit</button>
+              </div>
+            )}
             {profits.loading ? <Spinner /> : profits.data.length === 0 ? (
               <Empty icon="💰" title="No profit records"
-                action={<button onClick={() => setShowAddProfit(true)} className="btn-primary text-sm px-5 py-2.5">Add First Record</button>} />
+                action={canEdit && <button onClick={() => setShowAddProfit(true)} className="btn-primary text-sm px-5 py-2.5">Add First Record</button>} />
             ) : (
               profits.data.map(rec => (
                 <div key={rec.id} className="card p-4">
@@ -163,18 +173,15 @@ export default function ProjectDetail() {
                     </div>
                     <div className="text-right">
                       <p className="text-xs text-gray-400">{new Date(rec.record_date).toLocaleDateString('en-IN')}</p>
-                      <button onClick={() => handleDeleteProfit(rec.id)} className="text-xs text-red-400 mt-1">delete</button>
+                      {isOwner && <button onClick={() => handleDeleteProfit(rec.id)} className="text-xs text-red-400 mt-1">delete</button>}
                     </div>
                   </div>
-                  {/* Per-investor split */}
                   <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
                     <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Distributed to</p>
                     {investors.data.map(inv => (
                       <div key={inv.investor_id} className="flex justify-between text-xs">
                         <span className="text-gray-500">{inv.investor_name} ({inv.share_percent}%)</span>
-                        <span className="font-semibold text-emerald-600 mono">
-                          {inr(rec.amount * inv.share_percent / 100)}
-                        </span>
+                        <span className="font-semibold text-emerald-600 mono">{inr(rec.amount * inv.share_percent / 100)}</span>
                       </div>
                     ))}
                   </div>
@@ -184,7 +191,7 @@ export default function ProjectDetail() {
           </>
         )}
 
-        {/* ── RUNNING BALANCES TAB ── */}
+        {/* BALANCES TAB */}
         {tab === 'balances' && (
           <>
             <p className="text-xs text-gray-400">Running totals: invested + profit − loaned out + repaid</p>
@@ -207,11 +214,11 @@ export default function ProjectDetail() {
                     </div>
                     <div className="space-y-1.5 text-xs border-t border-gray-50 pt-3">
                       {[
-                        { l: 'Amount invested',         v: inr(b.amount_invested),         c: 'text-gray-700' },
-                        { l: '+ Profit allocated',      v: `+${inr(b.profit_allocated)}`,   c: 'text-emerald-600' },
-                        { l: '− Loaned out',            v: `-${inr(b.money_loaned_out)}`,   c: 'text-red-500' },
-                        { l: '+ Repaid received',       v: `+${inr(b.money_repaid_received)}`, c: 'text-emerald-600' },
-                        { l: '+ Moved to projects',     v: `+${inr(b.money_moved_to_projects)}`, c: 'text-blue-600' },
+                        { l: 'Amount invested',     v: inr(b.amount_invested),              c: 'text-gray-700' },
+                        { l: '+ Profit allocated',  v: `+${inr(b.profit_allocated)}`,        c: 'text-emerald-600' },
+                        { l: '− Loaned out',         v: `-${inr(b.money_loaned_out)}`,        c: 'text-red-500' },
+                        { l: '+ Repaid received',   v: `+${inr(b.money_repaid_received)}`,   c: 'text-emerald-600' },
+                        { l: '+ Moved to projects', v: `+${inr(b.money_moved_to_projects)}`, c: 'text-blue-600' },
                       ].map(({ l, v, c }) => (
                         <div key={l} className="flex justify-between">
                           <span className="text-gray-400">{l}</span>
@@ -238,32 +245,32 @@ export default function ProjectDetail() {
       </div>
 
       {/* Add Investor Sheet */}
-      <AddInvestorSheet
-        open={showAddInv}
-        onClose={() => setShowAddInv(false)}
-        projectId={id}
-        projectValue={projectValue}
-        remainingShare={100 - totalShare}
-        onSaved={() => { setShowAddInv(false); investors.reload(); balances.reload(); show('Investor added!') }}
-      />
+      {canEdit && (
+        <AddInvestorSheet open={showAddInv} onClose={() => setShowAddInv(false)}
+          projectId={id} projectValue={projectValue} remainingShare={100 - totalShare}
+          onSaved={() => { setShowAddInv(false); investors.reload(); balances.reload(); show('Investor added!') }} />
+      )}
 
       {/* Add Profit Sheet */}
-      <AddProfitSheet
-        open={showAddProfit}
-        onClose={() => setShowAddProfit(false)}
-        projectId={id}
-        onSaved={() => { setShowAddProfit(false); profits.reload(); investors.reload(); show('Profit recorded!') }}
-      />
+      {canEdit && (
+        <AddProfitSheet open={showAddProfit} onClose={() => setShowAddProfit(false)}
+          projectId={id}
+          onSaved={() => { setShowAddProfit(false); profits.reload(); investors.reload(); show('Profit recorded!') }} />
+      )}
+
+      {/* Share Modal */}
+      {isOwner && project && (
+        <ShareModal open={showShare} onClose={() => setShowShare(false)} project={project} />
+      )}
     </div>
   )
 }
 
-// ── Add Investor Sheet ────────────────────────────────────────
 function AddInvestorSheet({ open, onClose, projectId, projectValue, remainingShare, onSaved }) {
-  const [form, setForm]   = useState({ name: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
+  const [form, setForm] = useState({ name: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
   const [autoAmt, setAutoAmt] = useState(true)
-  const [saving, setSaving]   = useState(false)
-  const [error, setError]     = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const handleShare = (v) => {
@@ -273,11 +280,11 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, remainingSha
 
   const submit = async (e) => {
     e.preventDefault()
-    const pct = parseFloat(form.share_percent)
-    if (pct <= 0 || pct > remainingShare) { setError(`Share must be between 0 and ${remainingShare.toFixed(1)}%`); return }
+    const p = parseFloat(form.share_percent)
+    if (p <= 0 || p > remainingShare) { setError(`Share must be between 0 and ${remainingShare.toFixed(1)}%`); return }
     setSaving(true); setError(null)
     try {
-      await createInvestor({ project_id: projectId, name: form.name, phone: form.phone || null, share_percent: pct, amount_invested: parseFloat(form.amount_invested), notes: form.notes || null })
+      await createInvestor({ project_id: projectId, name: form.name, phone: form.phone || null, share_percent: p, amount_invested: parseFloat(form.amount_invested), notes: form.notes || null })
       setForm({ name: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
       onSaved()
     } catch (e) { setError(e.message) } finally { setSaving(false) }
@@ -286,12 +293,8 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, remainingSha
   return (
     <Sheet open={open} onClose={onClose} title="Add Investor">
       <form onSubmit={submit} className="space-y-4">
-        <Field label="Full Name *">
-          <input className="input" placeholder="Investor name" value={form.name} onChange={e => set('name', e.target.value)} required />
-        </Field>
-        <Field label="Phone">
-          <input className="input" type="tel" placeholder="+91 98765 43210" value={form.phone} onChange={e => set('phone', e.target.value)} />
-        </Field>
+        <Field label="Full Name *"><input className="input" placeholder="Investor name" value={form.name} onChange={e => set('name', e.target.value)} required /></Field>
+        <Field label="Phone"><input className="input" type="tel" placeholder="+91 98765 43210" value={form.phone} onChange={e => set('phone', e.target.value)} /></Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label={`Share % (max ${remainingShare.toFixed(1)}%)`}>
             <input className="input" type="number" step="0.01" max={remainingShare} placeholder="25" value={form.share_percent} onChange={e => handleShare(e.target.value)} required />
@@ -301,12 +304,7 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, remainingSha
               onChange={e => { setAutoAmt(false); set('amount_invested', e.target.value) }} required />
           </Field>
         </div>
-        {autoAmt && form.share_percent && (
-          <p className="text-xs text-gray-400 -mt-2">Auto-computed from project value · {inr(parseFloat(form.amount_invested||0))}</p>
-        )}
-        <Field label="Notes">
-          <textarea className="input resize-none" rows={2} placeholder="Optional" value={form.notes} onChange={e => set('notes', e.target.value)} />
-        </Field>
+        <Field label="Notes"><textarea className="input resize-none" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)} /></Field>
         {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
         <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Adding…' : 'Add Investor'}</button>
       </form>
@@ -314,11 +312,10 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, remainingSha
   )
 }
 
-// ── Add Profit Sheet ──────────────────────────────────────────
 function AddProfitSheet({ open, onClose, projectId, onSaved }) {
   const [form, setForm] = useState({ amount: '', record_date: isoDate(), notes: '' })
   const [saving, setSaving] = useState(false)
-  const [error, setError]   = useState(null)
+  const [error, setError] = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const submit = async (e) => {
@@ -334,15 +331,9 @@ function AddProfitSheet({ open, onClose, projectId, onSaved }) {
   return (
     <Sheet open={open} onClose={onClose} title="Record Profit">
       <form onSubmit={submit} className="space-y-4">
-        <Field label="Profit Amount (₹) *">
-          <input className="input" type="number" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} required />
-        </Field>
-        <Field label="Date">
-          <input className="input" type="date" value={form.record_date} onChange={e => set('record_date', e.target.value)} />
-        </Field>
-        <Field label="Notes">
-          <textarea className="input resize-none" rows={2} placeholder="e.g. Q1 rental income" value={form.notes} onChange={e => set('notes', e.target.value)} />
-        </Field>
+        <Field label="Profit Amount (₹) *"><input className="input" type="number" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} required /></Field>
+        <Field label="Date"><input className="input" type="date" value={form.record_date} onChange={e => set('record_date', e.target.value)} /></Field>
+        <Field label="Notes"><textarea className="input resize-none" rows={2} placeholder="e.g. Q1 rental income" value={form.notes} onChange={e => set('notes', e.target.value)} /></Field>
         {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
         <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Record Profit'}</button>
       </form>
