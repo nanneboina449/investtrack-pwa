@@ -3,7 +3,8 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   useInvestors, useInvestorBalances, useProfitRecords, useExpenses,
-  createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord, createExpense, deleteExpense
+  createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord, createExpense, deleteExpense,
+  updateProject, deleteProject
 } from '../hooks/useData'
 import { useMyRole } from '../hooks/useSharing'
 import { inr, pct, isoDate, supabase } from '../lib/supabase'
@@ -16,6 +17,8 @@ export default function ProjectDetail() {
   const [tab, setTab] = useState('investors')
   const { show, Toast } = useToast()
   const [showShare, setShowShare] = useState(false)
+  const [showMenu, setShowMenu]   = useState(false)
+  const [showEdit, setShowEdit]   = useState(false)
 
   const investors = useInvestors(id)
   const balances  = useInvestorBalances(id)
@@ -70,10 +73,32 @@ export default function ProjectDetail() {
         <div className="flex justify-between items-center mb-3">
           <button onClick={() => navigate(-1)} className="text-brand-100 text-sm flex items-center gap-1">← Back</button>
           {isOwner && (
-            <button onClick={() => setShowShare(true)}
-              className="flex items-center gap-1.5 text-sm font-semibold bg-white/15 px-3 py-1.5 rounded-xl active:scale-95 transition-transform">
-              <span>👥</span> Share
-            </button>
+            <div className="relative">
+              <button onClick={() => setShowMenu(!showMenu)}
+                className="flex items-center gap-1 text-sm font-semibold bg-white/15 px-3 py-1.5 rounded-xl active:scale-95 transition-transform">
+                ⋯ More
+              </button>
+              {showMenu && (
+                <div className="absolute right-0 top-10 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 min-w-[160px] overflow-hidden">
+                  <button onClick={() => { setShowEdit(true); setShowMenu(false) }}
+                    className="w-full text-left px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                    ✏️ Edit Project
+                  </button>
+                  <button onClick={() => { setShowShare(true); setShowMenu(false) }}
+                    className="w-full text-left px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                    👥 Share
+                  </button>
+                  <button onClick={async () => {
+                    setShowMenu(false)
+                    if (!confirm('Delete this project? This cannot be undone.')) return
+                    try { await deleteProject(id); navigate('/projects') }
+                    catch (e) { show(e.message, 'error') }
+                  }} className="w-full text-left px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50 flex items-center gap-2 border-t border-gray-100">
+                    🗑️ Delete Project
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </div>
         <h1 className="text-xl font-bold mb-4">{projectName}</h1>
@@ -329,6 +354,13 @@ export default function ProjectDetail() {
           onSaved={() => { setShowAddExpense(false); expenses.reload(); investors.reload(); show('Expense recorded!') }} />
       )}
 
+      {/* Edit Project Sheet */}
+      {isOwner && project && (
+        <EditProjectSheet open={showEdit} onClose={() => setShowEdit(false)}
+          project={project}
+          onSaved={() => { setShowEdit(false); show('Project updated!') }} />
+      )}
+
       {/* Share Modal */}
       {isOwner && project && (
         <ShareModal open={showShare} onClose={() => setShowShare(false)} project={project} />
@@ -519,6 +551,73 @@ function AddExpenseSheet({ open, onClose, projectId, onSaved }) {
         </Field>
 
       </form>
+    </Sheet>
+  )
+}
+
+// ── Edit Project Sheet ────────────────────────────────────────
+function EditProjectSheet({ open, onClose, project, onSaved }) {
+  const [form, setForm] = useState({
+    name:              project?.name              ?? '',
+    description:       project?.description       ?? '',
+    total_value:       project?.total_value       ?? '',
+    our_stake_percent: project?.our_stake_percent ?? 100,
+    status:            project?.status            ?? 'active',
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const submit = async () => {
+    setSaving(true); setError(null)
+    try {
+      await updateProject(project.id, {
+        name:              form.name,
+        description:       form.description || null,
+        total_value:       parseFloat(form.total_value),
+        our_stake_percent: parseFloat(form.our_stake_percent),
+        status:            form.status,
+      })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Edit Project"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>
+            {saving ? 'Saving…' : 'Save Changes'}
+          </button>
+        </div>
+      }>
+      <div className="space-y-4">
+        <Field label="Project Name *">
+          <input className="input" value={form.name} onChange={e => set('name', e.target.value)} />
+        </Field>
+        <Field label="Description">
+          <textarea className="input resize-none" rows={2} value={form.description}
+            onChange={e => set('description', e.target.value)} />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Total Value (₹)">
+            <input className="input" type="number" value={form.total_value}
+              onChange={e => set('total_value', e.target.value)} />
+          </Field>
+          <Field label="Our Stake %">
+            <input className="input" type="number" min="1" max="100" value={form.our_stake_percent}
+              onChange={e => set('our_stake_percent', e.target.value)} />
+          </Field>
+        </div>
+        <Field label="Status">
+          <select className="input" value={form.status} onChange={e => set('status', e.target.value)}>
+            <option value="upcoming">Upcoming</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+          </select>
+        </Field>
+      </div>
     </Sheet>
   )
 }
