@@ -370,7 +370,7 @@ export default function ProjectDetail() {
 }
 
 function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotalValue, stakePercent, remainingShare, onSaved }) {
-  const [form, setForm] = useState({ name: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
+  const [form, setForm] = useState({ name: '', email: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
   const [autoAmt, setAutoAmt] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -388,7 +388,7 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
     setSaving(true); setError(null)
     try {
       await createInvestor({ project_id: projectId, name: form.name, phone: form.phone || null, share_percent: p, amount_invested: parseFloat(form.amount_invested), notes: form.notes || null })
-      setForm({ name: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
+      setForm({ name: '', email: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
       onSaved()
     } catch (e) { setError(e.message) } finally { setSaving(false) }
   }

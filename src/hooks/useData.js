@@ -261,3 +261,15 @@ export async function deleteExpense(id) {
   const { error } = await supabase.from('project_expenses').delete().eq('id', id)
   if (error) throw error
 }
+
+// ── My investments (as investor across all projects) ──────────
+export function useMyInvestments() {
+  return useFetch(async () => {
+    const { data, error } = await supabase
+      .from('my_investments')
+      .select('*')
+      .order('project_name')
+    if (error) throw error
+    return data
+  })
+}

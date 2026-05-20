@@ -1,6 +1,6 @@
 // src/pages/Dashboard.jsx
 import { useNavigate } from 'react-router-dom'
-import { useDashboard } from '../hooks/useData'
+import { useDashboard, useMyInvestments } from '../hooks/useData'
 import { acceptPendingInvites } from '../hooks/useSharing'
 import { inr, pct } from '../lib/supabase'
 import { StatCard, Spinner, Empty } from '../components/ui'
@@ -10,6 +10,7 @@ import { useEffect } from 'react'
 export default function Dashboard() {
   const { summary, projects, loading } = useDashboard()
   const navigate = useNavigate()
+  const myInvestments = useMyInvestments()
 
   // Auto-accept any pending invites when user lands on dashboard
   useEffect(() => { acceptPendingInvites() }, [])
@@ -55,6 +56,38 @@ export default function Dashboard() {
               <StatCard icon="↗"  label="Loans Given"      value={inr(summary.loansGiven)}   color="orange" />
               <StatCard icon="↙"  label="Loans Received"   value={inr(summary.loansReceived)} color="purple" />
             </div>
+
+            {/* My investments across shared projects */}
+            {myInvestments.data.length > 0 && (
+              <section>
+                <h2 className="font-bold text-gray-900 mb-3">My Investments</h2>
+                <div className="space-y-2">
+                  {myInvestments.data.map(inv => (
+                    <div key={inv.investor_id} className="card p-4">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <p className="font-semibold text-gray-900 text-sm">{inv.project_name}</p>
+                          <p className="text-xs text-gray-400">{inv.share_percent}% share · {inv.project_status}</p>
+                        </div>
+                        <span className={`badge-${inv.project_status}`}>{inv.project_status}</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 text-center border-t border-gray-50 pt-2 mt-2">
+                        {[
+                          { l: 'Invested',    v: inr(inv.amount_invested) },
+                          { l: 'Net Return',  v: inr(inv.net_return), g: inv.net_return >= 0 },
+                          { l: 'Current Val', v: inr(inv.current_value) },
+                        ].map(({ l, v, g }) => (
+                          <div key={l}>
+                            <p className={`text-xs font-bold mono ${g ? 'text-emerald-600' : 'text-gray-800'}`}>{v}</p>
+                            <p className="text-[10px] text-gray-400 mt-0.5">{l}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {active.length > 0 && (
               <section>
