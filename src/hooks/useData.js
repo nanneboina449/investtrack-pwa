@@ -38,6 +38,17 @@ export function useProjects() {
 }
 
 export async function createProject(values) {
+  // Force refresh session to ensure JWT is current
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+  console.log('[createProject] session uid:', session?.user?.id, '| role:', session?.user?.role)
+  if (!session) {
+    await supabase.auth.refreshSession()
+  }
+
+  // Debug: check what DB sees
+  const { data: authDebug } = await supabase.rpc('debug_auth').maybeSingle()
+  console.log('[createProject] DB auth context:', authDebug)
+
   const { data, error } = await supabase
     .from('projects')
     .insert({ ...values, our_stake_percent: values.our_stake_percent ?? 100 })
