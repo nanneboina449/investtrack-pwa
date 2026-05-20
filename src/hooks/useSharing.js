@@ -44,10 +44,10 @@ export function usePendingInvites() {
 
 // ── Invite a user by email ───────────────────────────────────
 export async function inviteUser({ projectId, email, role }) {
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { session } } = await supabase.auth.getSession()
   const { error } = await supabase.from('project_members').insert({
     project_id:    projectId,
-    invited_by:    user.id,
+    invited_by:    session?.user?.id,
     invited_email: email.toLowerCase().trim(),
     role,
     status:        'pending'
@@ -57,10 +57,10 @@ export async function inviteUser({ projectId, email, role }) {
 
 // ── Accept an invite ─────────────────────────────────────────
 export async function acceptInvite(inviteId) {
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { session } } = await supabase.auth.getSession()
   const { error } = await supabase
     .from('project_members')
-    .update({ status: 'accepted', user_id: user.id, accepted_at: new Date().toISOString() })
+    .update({ status: 'accepted', user_id: session?.user?.id, accepted_at: new Date().toISOString() })
     .eq('id', inviteId)
   if (error) throw error
 }
