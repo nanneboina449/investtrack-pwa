@@ -72,13 +72,8 @@ export function useInvestors(projectId) {
 }
 
 export async function createInvestor(values) {
-  const { data, error } = await supabase
-    .from('investors')
-    .insert(values)
-    .select()
-    .single()
+  const { error } = await supabase.from('investors').insert(values)
   if (error) throw error
-  return data
 }
 
 export async function deleteInvestor(id) {
@@ -101,13 +96,10 @@ export function useProfitRecords(projectId) {
 }
 
 export async function createProfitRecord(values) {
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from('profit_records')
     .insert({ ...values, record_date: isoDate(values.record_date) })
-    .select()
-    .single()
   if (error) throw error
-  return data
 }
 
 export async function deleteProfitRecord(id) {
@@ -248,13 +240,8 @@ export function useExpenses(projectId) {
 }
 
 export async function createExpense(values) {
-  const { data, error } = await supabase
-    .from('project_expenses')
-    .insert(values)
-    .select()
-    .single()
+  const { error } = await supabase.from('project_expenses').insert(values)
   if (error) throw error
-  return data
 }
 
 export async function deleteExpense(id) {
