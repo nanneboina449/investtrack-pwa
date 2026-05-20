@@ -41,7 +41,7 @@ export async function createProject(values) {
   const { data: { user } } = await supabase.auth.getUser()
   const { data, error } = await supabase
     .from('projects')
-    .insert({ ...values, user_id: user.id })
+    .insert({ ...values, user_id: user.id, our_stake_percent: values.our_stake_percent ?? 100 })
     .select()
     .single()
   if (error) throw error

@@ -35,7 +35,9 @@ export default function ProjectDetail() {
   const totalShare  = investors.data.reduce((s, i) => s + (i.share_percent ?? 0), 0)
   const totalProfit = profits.data.reduce((s, p) => s + (p.amount ?? 0), 0)
   const projectName  = project?.name ?? investors.data[0]?.project_name ?? 'Project'
-  const projectValue = project?.total_value ?? investors.data[0]?.total_value ?? 0
+  const projectTotalValue = project?.total_value ?? investors.data[0]?.total_value ?? 0
+  const stakePercent = project?.our_stake_percent ?? 100
+  const projectValue = Math.round(projectTotalValue * stakePercent / 100)
 
   const handleDeleteInvestor = async (invId) => {
     if (!confirm('Remove this investor?')) return
@@ -67,7 +69,7 @@ export default function ProjectDetail() {
         <h1 className="text-xl font-bold mb-4">{projectName}</h1>
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-white/10 rounded-xl p-2.5 text-center">
-            <p className="text-brand-100 text-[10px] mb-0.5">Total Value</p>
+            <p className="text-brand-100 text-[10px] mb-0.5">Property Value</p>
             <p className="font-bold mono text-xs">{inr(projectValue)}</p>
           </div>
           <div className="bg-white/10 rounded-xl p-2.5 text-center">
@@ -247,7 +249,7 @@ export default function ProjectDetail() {
       {/* Add Investor Sheet */}
       {canEdit && (
         <AddInvestorSheet open={showAddInv} onClose={() => setShowAddInv(false)}
-          projectId={id} projectValue={projectValue} remainingShare={100 - totalShare}
+          projectId={id} projectValue={projectValue} projectTotalValue={projectTotalValue} stakePercent={stakePercent} remainingShare={100 - totalShare}
           onSaved={() => { setShowAddInv(false); investors.reload(); balances.reload(); show('Investor added!') }} />
       )}
 
@@ -266,7 +268,7 @@ export default function ProjectDetail() {
   )
 }
 
-function AddInvestorSheet({ open, onClose, projectId, projectValue, remainingShare, onSaved }) {
+function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotalValue, stakePercent, remainingShare, onSaved }) {
   const [form, setForm] = useState({ name: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
   const [autoAmt, setAutoAmt] = useState(true)
   const [saving, setSaving] = useState(false)
