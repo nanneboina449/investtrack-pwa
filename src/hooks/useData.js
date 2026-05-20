@@ -38,10 +38,12 @@ export function useProjects() {
 }
 
 export async function createProject(values) {
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { session } } = await supabase.auth.getSession()
+  const userId = session?.user?.id
+  if (!userId) throw new Error('Not authenticated — please sign in again')
   const { data, error } = await supabase
     .from('projects')
-    .insert({ ...values, user_id: user.id, our_stake_percent: values.our_stake_percent ?? 100 })
+    .insert({ ...values, user_id: userId, our_stake_percent: values.our_stake_percent ?? 100 })
     .select()
     .single()
   if (error) throw error
@@ -140,12 +142,14 @@ export function useLoans() {
 }
 
 export async function createLoan({ adjustment, contributions }) {
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { session } } = await supabase.auth.getSession()
+  const userId = session?.user?.id
+  if (!userId) throw new Error('Not authenticated')
 
   // 1. Create the cash_adjustment record
   const { data: adj, error: adjErr } = await supabase
     .from('cash_adjustments')
-    .insert({ ...adjustment, user_id: user.id })
+    .insert({ ...adjustment, user_id: userId })
     .select()
     .single()
   if (adjErr) throw adjErr
