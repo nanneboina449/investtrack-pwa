@@ -373,7 +373,7 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
   const [form, setForm] = useState({ name: '', email: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
   const [autoAmt, setAutoAmt] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState(null)
+  const [error, setError]   = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const handleShare = (v) => {
@@ -381,34 +381,100 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
     if (autoAmt && projectValue) set('amount_invested', ((parseFloat(v)||0) * projectValue / 100).toFixed(0))
   }
 
-  const submit = async (e) => {
-    e.preventDefault()
+  const submit = async () => {
     const p = parseFloat(form.share_percent)
-    if (p <= 0 || p > remainingShare) { setError(`Share must be between 0 and ${remainingShare.toFixed(1)}%`); return }
+    if (!form.name)              { setError('Name is required'); return }
+    if (!p || p > remainingShare){ setError(`Share must be between 0 and ${remainingShare.toFixed(1)}%`); return }
+    if (!form.amount_invested)   { setError('Amount is required'); return }
     setSaving(true); setError(null)
     try {
-      await createInvestor({ project_id: projectId, name: form.name, phone: form.phone || null, share_percent: p, amount_invested: parseFloat(form.amount_invested), notes: form.notes || null })
+      await createInvestor({
+        project_id:     projectId,
+        name:           form.name,
+        email:          form.email || null,
+        phone:          form.phone || null,
+        share_percent:  p,
+        amount_invested:parseFloat(form.amount_invested),
+        notes:          form.notes || null,
+      })
+      if (form.email) {
+        try {
+          const { inviteUser } = await import('../hooks/useSharing')
+          await inviteUser({ projectId, email: form.email, role: 'viewer' })
+        } catch (_) {}
+      }
       setForm({ name: '', email: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
       onSaved()
     } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
 
+  const computedAmt = ((parseFloat(form.share_percent)||0) * projectValue / 100)
+
   return (
-    <Sheet open={open} onClose={onClose} title="Add Investor">
-      <form onSubmit={submit} className="space-y-4">
-        <Field label="Full Name *"><input className="input" placeholder="Investor name" value={form.name} onChange={e => set('name', e.target.value)} required /></Field>
-        <Field label="Phone"><input className="input" type="tel" placeholder="+91 98765 43210" value={form.phone} onChange={e => set('phone', e.target.value)} /></Field>
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Add Investor"
+      footer={
+        <div className="space-y-2">
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+          {form.share_percent && (
+            <div className="flex items-center justify-between text-xs text-brand-700 bg-brand-50 rounded-xl px-3 py-2">
+              <span>Amount from pool</span>
+              <span className="font-bold mono">{inr(computedAmt)}</span>
+            </div>
+          )}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>
+            {saving ? 'Adding…' : 'Add Investor'}
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        {/* Pool info */}
+        <div className="bg-blue-50 rounded-xl px-3 py-2.5 text-xs text-blue-800">
+          <p className="font-semibold">Pool = {inr(projectValue)}
+            <span className="font-normal text-blue-500 ml-1">({stakePercent}% of {inr(projectTotalValue)})</span>
+          </p>
+          <p className="text-blue-500 mt-0.5">Share % splits this pool · {remainingShare.toFixed(1)}% still available</p>
+        </div>
+
+        {/* Required fields */}
+        <Field label="Full Name *">
+          <input className="input" placeholder="e.g. Ravi Kumar" value={form.name}
+            onChange={e => set('name', e.target.value)} autoFocus />
+        </Field>
+
         <div className="grid grid-cols-2 gap-3">
-          <Field label={`Share % (max ${remainingShare.toFixed(1)}%)`}>
-            <input className="input" type="number" step="0.01" max={remainingShare} placeholder="25" value={form.share_percent} onChange={e => handleShare(e.target.value)} required />
+          <Field label={`Share % *`}>
+            <input className="input" type="number" step="0.01" min="0.01"
+              max={remainingShare} placeholder="25"
+              value={form.share_percent} onChange={e => handleShare(e.target.value)} />
           </Field>
-          <Field label="Amount (₹)">
-            <input className="input" type="number" placeholder="0" value={form.amount_invested}
-              onChange={e => { setAutoAmt(false); set('amount_invested', e.target.value) }} required />
+          <Field label="Amount (₹) *">
+            <input className="input" type="number" placeholder="0"
+              value={form.amount_invested}
+              onChange={e => { setAutoAmt(false); set('amount_invested', e.target.value) }} />
           </Field>
         </div>
-        <Field label="Notes"><textarea className="input resize-none" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)} /></Field>
-      </form>
+
+        {/* Optional fields */}
+        <Collapsible label="Optional details" icon="📋">
+          <Field label="Email (sends app invite)">
+            <input className="input" type="email" placeholder="investor@email.com"
+              value={form.email} onChange={e => set('email', e.target.value)} />
+            {form.email && <p className="text-xs text-blue-500 mt-1">✉️ They'll get a Viewer invite to this project</p>}
+          </Field>
+          <Field label="Phone">
+            <input className="input" type="tel" placeholder="+91 98765 43210"
+              value={form.phone} onChange={e => set('phone', e.target.value)} />
+          </Field>
+          <Field label="Notes">
+            <textarea className="input resize-none" rows={2} placeholder="Optional…"
+              value={form.notes} onChange={e => set('notes', e.target.value)} />
+          </Field>
+        </Collapsible>
+      </div>
     </Sheet>
   )
 }
