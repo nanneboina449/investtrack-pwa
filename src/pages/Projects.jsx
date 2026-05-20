@@ -131,17 +131,14 @@ function AddProjectSheet({ open, onClose, onSaved }) {
           <Field label="Total Value (₹) *">
             <input className="input" type="number" placeholder="0" value={form.total_value} onChange={e => set('total_value', e.target.value)} required />
           </Field>
-          <Field label="Our Stake % (your share of the property)">
-            <input className="input" type="number" step="0.01" placeholder="100  (100% = full ownership, 30% = partial stake)" value={form.our_stake_percent} onChange={e => set('our_stake_percent', e.target.value)} />
+          <Field label="Our Stake %">
+            <input className="input" type="number" step="0.01" placeholder="e.g. 30" value={form.our_stake_percent} onChange={e => set('our_stake_percent', e.target.value)} />
           </Field>
         </div>
         {form.total_value && form.our_stake_percent && (
           <div className="bg-brand-50 border border-brand-100 rounded-xl px-4 py-3">
-            <p className="text-xs text-brand-700 font-medium">
-              Your pool = <span className="font-bold">{inr(parseFloat(form.total_value||0) * parseFloat(form.our_stake_percent||100) / 100)}</span>
-              <span className="text-brand-400 ml-2">({form.our_stake_percent}% of {inr(parseFloat(form.total_value||0))})</span>
-            </p>
-            <p className="text-[10px] text-brand-500 mt-0.5">Investor shares will be % of this pool</p>
+            <p className="text-xs text-brand-700 font-medium">Your investable pool = <span className="font-bold mono">{inr(parseFloat(form.total_value||0) * parseFloat(form.our_stake_percent||100) / 100)}</span></p>
+            <p className="text-[10px] text-brand-500 mt-0.5">{form.our_stake_percent}% of {inr(parseFloat(form.total_value||0))} · Investor shares split from this amount</p>
           </div>
         )}
         <Field label="Status">

@@ -343,6 +343,17 @@ end;
 $$ language plpgsql security definer;
 
 -- ============================================================
+-- DROP OLD POLICIES (safe to run even if they don't exist)
+-- ============================================================
+do $$ declare
+  r record;
+begin
+  for r in (select policyname, tablename from pg_policies where schemaname = 'public') loop
+    execute format('drop policy if exists %I on %I', r.policyname, r.tablename);
+  end loop;
+end $$;
+
+-- ============================================================
 -- ROW LEVEL SECURITY
 -- ============================================================
 
