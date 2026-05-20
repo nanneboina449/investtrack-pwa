@@ -38,24 +38,13 @@ export function useProjects() {
 }
 
 export async function createProject(values) {
-  // Force refresh session to ensure JWT is current
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession()
-  console.log('[createProject] session uid:', session?.user?.id, '| role:', session?.user?.role)
-  if (!session) {
-    await supabase.auth.refreshSession()
-  }
-
-  // Debug: check what DB sees
-  const { data: authDebug } = await supabase.rpc('debug_auth').maybeSingle()
-  console.log('[createProject] DB auth context:', authDebug)
-
-  const { data, error } = await supabase
+  // Insert without .select() to avoid SELECT RLS policy on returned row
+  const { error } = await supabase
     .from('projects')
     .insert({ ...values, our_stake_percent: values.our_stake_percent ?? 100 })
-    .select()
-    .single()
   if (error) throw error
-  return data
+  // Return minimal object — caller reloads the list anyway
+  return { name: values.name }
 }
 
 export async function updateProject(id, values) {
