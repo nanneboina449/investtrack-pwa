@@ -38,7 +38,7 @@ export default function Settings() {
             {[
               { label: 'Version',       value: '1.0.0' },
               { label: 'Currency',      value: 'Indian Rupee (₹)' },
-              { label: 'Backend',       value: 'Supabase' },
+              
               { label: 'Platform',      value: 'PWA' },
             ].map(({ label, value }) => (
               <div key={label} className="flex justify-between text-sm">
