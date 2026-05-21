@@ -171,32 +171,57 @@ export default function ProjectDetail() {
               <Empty icon="👥" title="No investors yet"
                 action={canEdit && <button onClick={() => setShowAddInv(true)} className="btn-primary text-sm px-5 py-2.5">Add First Investor</button>} />
             ) : (
-              investors.data.map(inv => (
-                <div key={inv.investor_id} className="card p-4">
-                  <div className="flex justify-between items-start mb-3">
-                    <div>
-                      <p className="font-semibold text-gray-900">{inv.investor_name}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">{inv.share_percent}% share</p>
+              investors.data.map(inv => {
+                const invPayments = payments.data.filter(p => p.investor_id === inv.investor_id)
+                const paid = invPayments.reduce(
+                  (s, p) => s + (p.payment_type === 'refund' ? -p.amount : p.amount), 0
+                )
+                const committed   = inv.amount_invested ?? 0
+                const expShare    = inv.total_expenses_allocated ?? 0
+                const outstanding = committed + expShare - paid
+                const owesProject = outstanding > 0.5
+                const projectOwes = outstanding < -0.5
+                return (
+                  <div key={inv.investor_id} className="card p-4">
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <p className="font-semibold text-gray-900">{inv.investor_name}</p>
+                        <p className="text-xs text-gray-400 mt-0.5">{inv.share_percent}% share</p>
+                      </div>
+                      {isOwner && (
+                        <button onClick={() => handleDeleteInvestor(inv.investor_id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">×</button>
+                      )}
                     </div>
-                    {isOwner && (
-                      <button onClick={() => handleDeleteInvestor(inv.investor_id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">×</button>
+                    <div className="grid grid-cols-4 gap-1 text-center border-t border-gray-50 pt-3">
+                      <div>
+                        <p className="text-xs font-bold mono text-gray-800">{inr(committed)}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">Committed</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold mono text-emerald-600">{inr(paid)}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">Paid</p>
+                      </div>
+                      <div>
+                        <p className={`text-xs font-bold mono ${owesProject ? 'text-amber-600' : projectOwes ? 'text-blue-600' : 'text-emerald-600'}`}>
+                          {inr(Math.abs(outstanding))}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          {owesProject ? 'Owes' : projectOwes ? 'Refund due' : 'Settled'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold mono text-emerald-600">{inr(inv.total_profit_allocated ?? 0)}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">Profit</p>
+                      </div>
+                    </div>
+                    {expShare > 0 && (
+                      <p className="text-[10px] text-gray-400 mt-2 pt-2 border-t border-gray-50">
+                        Owes = committed {inr(committed)} + expense share {inr(expShare)} − paid {inr(paid)}
+                      </p>
                     )}
                   </div>
-                  <div className="grid grid-cols-4 gap-1 text-center border-t border-gray-50 pt-3">
-                    {[
-                      { l: 'Invested', v: inr(inv.amount_invested) },
-                      { l: 'Profit',   v: inr(inv.total_profit_allocated ?? 0), g: true },
-                      { l: 'Value',    v: inr(inv.current_value ?? inv.amount_invested) },
-                      { l: 'ROI',      v: pct(inv.amount_invested > 0 ? ((inv.total_profit_allocated??0)/inv.amount_invested)*100 : 0), g: true },
-                    ].map(({ l, v, g }) => (
-                      <div key={l}>
-                        <p className={`text-xs font-bold mono ${g && (inv.total_profit_allocated??0)>=0 ? 'text-emerald-600' : 'text-gray-800'}`}>{v}</p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">{l}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))
+                )
+              })
             )}
           </>
         )}
@@ -550,10 +575,11 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
               max={remainingShare} placeholder="25"
               value={form.share_percent} onChange={e => handleShare(e.target.value)} />
           </Field>
-          <Field label="Amount (₹) *">
+          <Field label="Committed Amount (₹) *">
             <input className="input" type="number" placeholder="0"
               value={form.amount_invested}
               onChange={e => { setAutoAmt(false); set('amount_invested', e.target.value) }} />
+            <p className="text-[10px] text-gray-400 mt-1">Their stake / what they owe — record actual payments later via + Payment.</p>
           </Field>
         </div>
 
