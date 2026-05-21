@@ -96,15 +96,35 @@ export function useProfitRecords(projectId) {
 }
 
 export async function createProfitRecord(values) {
-  const { error } = await supabase
-    .from('profit_records')
-    .insert({ ...values, record_date: isoDate(values.record_date) })
+  // Calls the RPC so profit_distributions rows are created atomically
+  // (either custom or auto-proportional based on whether distributions provided)
+  const { data, error } = await supabase.rpc('create_profit_record', {
+    p_project_id:    values.project_id,
+    p_amount:        values.amount,
+    p_record_date:   isoDate(values.record_date),
+    p_notes:         values.notes ?? null,
+    p_distributions: values.distributions ?? null,
+  })
   if (error) throw error
+  return data
 }
 
 export async function deleteProfitRecord(id) {
   const { error } = await supabase.from('profit_records').delete().eq('id', id)
   if (error) throw error
+}
+
+// ── Profit Distributions (per-investor breakdown of each profit record) ──
+export function useProfitDistributions(projectId) {
+  return useFetch(async () => {
+    if (!projectId) return []
+    const { data, error } = await supabase
+      .from('profit_distributions')
+      .select('id, profit_id, investor_id, amount, profit_records!inner(project_id)')
+      .eq('profit_records.project_id', projectId)
+    if (error) throw error
+    return data ?? []
+  }, [projectId])
 }
 
 // ── Cash Adjustments & Loans ──────────────────────────────────
