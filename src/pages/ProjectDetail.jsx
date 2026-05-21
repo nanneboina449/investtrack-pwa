@@ -1,10 +1,11 @@
 // src/pages/ProjectDetail.jsx
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  useInvestors, useInvestorBalances, useProfitRecords, useExpenses, useInvestorPayments, useProfitDistributions,
+  useInvestors, useInvestorBalances, useProfitRecords, useExpenses, useInvestorPayments, useProfitDistributions, useProjects,
   createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord,
   createExpense, deleteExpense, createPayment, deletePayment,
+  reallocateInvestorPosition,
   updateProject, deleteProject
 } from '../hooks/useData'
 import { useMyRole } from '../hooks/useSharing'
@@ -27,6 +28,14 @@ export default function ProjectDetail() {
   const expenses       = useExpenses(id)
   const payments       = useInvestorPayments(id)
   const distributions  = useProfitDistributions(id)
+  const allProjects    = useProjects()
+  const projectNameById = useMemo(() => {
+    const m = {}
+    for (const p of (allProjects.data ?? [])) m[p.id] = p.name
+    return m
+  }, [allProjects.data])
+
+  const [moveFromInv, setMoveFromInv] = useState(null)
 
   const [showAddInv, setShowAddInv]         = useState(false)
   const [showAddProfit, setShowAddProfit]   = useState(false)
@@ -198,9 +207,17 @@ export default function ProjectDetail() {
                         <p className="font-semibold text-gray-900">{inv.investor_name}</p>
                         <p className="text-xs text-gray-400 mt-0.5">{inv.share_percent}% share</p>
                       </div>
-                      {isOwner && (
-                        <button onClick={() => handleDeleteInvestor(inv.investor_id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">×</button>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {canEdit && (
+                          <button onClick={() => setMoveFromInv(inv)}
+                            className="text-[10px] font-semibold px-2 py-1 rounded-lg bg-blue-50 text-blue-700">
+                            ⇄ Move
+                          </button>
+                        )}
+                        {isOwner && (
+                          <button onClick={() => handleDeleteInvestor(inv.investor_id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">×</button>
+                        )}
+                      </div>
                     </div>
                     <div className="grid grid-cols-4 gap-1 text-center border-t border-gray-50 pt-3">
                       <div>
@@ -282,32 +299,46 @@ export default function ProjectDetail() {
                       </div>
                     </div>
                     <div className="space-y-2">
-                      {invPayments.map(p => (
-                        <div key={p.id} className="flex justify-between items-start text-xs">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${PAYMENT_TYPE_STYLE[p.payment_type]}`}>
-                                {PAYMENT_TYPE_LABEL[p.payment_type]}
-                              </span>
-                              <span className="text-gray-400">{new Date(p.payment_date).toLocaleDateString('en-IN')}</span>
+                      {invPayments.map(p => {
+                        const fromName = p.source_project_id ? projectNameById[p.source_project_id] : null
+                        const toName   = p.destination_project_id ? projectNameById[p.destination_project_id] : null
+                        return (
+                          <div key={p.id} className="flex justify-between items-start text-xs">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${PAYMENT_TYPE_STYLE[p.payment_type]}`}>
+                                  {PAYMENT_TYPE_LABEL[p.payment_type]}
+                                </span>
+                                {fromName && (
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
+                                    ← from {fromName}
+                                  </span>
+                                )}
+                                {toName && (
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">
+                                    → to {toName}
+                                  </span>
+                                )}
+                                <span className="text-gray-400">{new Date(p.payment_date).toLocaleDateString('en-IN')}</span>
+                              </div>
+                              {p.expense_description && (
+                                <p className="text-gray-600 mt-0.5 truncate">{p.expense_description}</p>
+                              )}
+                              {p.notes && !p.expense_description && (
+                                <p className="text-gray-500 mt-0.5 truncate">{p.notes}</p>
+                              )}
                             </div>
-                            {p.expense_description && (
-                              <p className="text-gray-600 mt-0.5 truncate">{p.expense_description}</p>
-                            )}
-                            {p.notes && !p.expense_description && (
-                              <p className="text-gray-500 mt-0.5 truncate">{p.notes}</p>
-                            )}
+                            <div className="flex items-center gap-2 ml-2 flex-shrink-0">
+                              <span className={`font-bold mono ${p.payment_type === 'refund' ? 'text-red-500' : 'text-emerald-600'}`}>
+                                {p.payment_type === 'refund' ? '-' : '+'}{inr(p.amount)}
+                              </span>
+                              {isOwner && (
+                                <button onClick={() => handleDeletePayment(p.id)} className="text-gray-300 hover:text-red-400 text-base leading-none">×</button>
+                              )}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2 ml-2 flex-shrink-0">
-                            <span className={`font-bold mono ${p.payment_type === 'refund' ? 'text-red-500' : 'text-emerald-600'}`}>
-                              {p.payment_type === 'refund' ? '-' : '+'}{inr(p.amount)}
-                            </span>
-                            {isOwner && (
-                              <button onClick={() => handleDeletePayment(p.id)} className="text-gray-300 hover:text-red-400 text-base leading-none">×</button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   </div>
                 )
@@ -518,6 +549,21 @@ export default function ProjectDetail() {
         <AddPaymentSheet open={showAddPayment} onClose={() => setShowAddPayment(false)}
           projectId={id} investors={investors.data}
           onSaved={() => { setShowAddPayment(false); payments.reload(); investors.reload(); balances.reload(); show('Payment recorded!') }} />
+      )}
+
+      {/* Move Position Sheet */}
+      {canEdit && moveFromInv && (
+        <MoveInvestorPositionSheet
+          investor={moveFromInv}
+          projects={allProjects.data}
+          currentProjectId={id}
+          onClose={() => setMoveFromInv(null)}
+          onSaved={() => {
+            setMoveFromInv(null)
+            payments.reload(); investors.reload(); balances.reload()
+            show('Position moved successfully')
+          }}
+        />
       )}
 
       {/* Edit Project Sheet */}
@@ -1062,6 +1108,89 @@ function AddPaymentSheet({ open, onClose, projectId, investors = [], onSaved }) 
           <textarea className="input resize-none" rows={2} placeholder="Optional…"
             value={form.notes} onChange={e => set('notes', e.target.value)} />
         </Field>
+      </div>
+    </Sheet>
+  )
+}
+
+// ── Move Investor Position Sheet ──────────────────────────────
+function MoveInvestorPositionSheet({ investor, projects = [], currentProjectId, onClose, onSaved }) {
+  const [destProjectId, setDestProjectId] = useState('')
+  const [amount, setAmount] = useState('')
+  const [date, setDate]     = useState(isoDate())
+  const [notes, setNotes]   = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+
+  const destProject = projects.find(p => p.id === destProjectId)
+
+  const submit = async () => {
+    if (!destProjectId) { setError('Pick a destination project'); return }
+    if (!amount || parseFloat(amount) <= 0) { setError('Amount must be positive'); return }
+    setSaving(true); setError(null)
+    try {
+      await reallocateInvestorPosition({
+        sourceInvestorId: investor.investor_id,
+        destProjectId,
+        amount: parseFloat(amount),
+        date,
+        notes: notes || null,
+      })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={true} onClose={onClose} title="Move Investor Position"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>
+            {saving ? 'Moving…' : 'Move Position'}
+          </button>
+        </div>
+      }>
+      <div className="space-y-4">
+        <div className="bg-blue-50 rounded-xl p-3 text-xs text-blue-800">
+          <p className="font-semibold mb-1">From {investor.investor_name} ({investor.share_percent}% share)</p>
+          <p className="text-blue-600">on this project → destination project</p>
+          <p className="text-[11px] text-blue-500 mt-1">
+            Creates a refund here and a top-up there. Destination must already have an investor with the same name — add them there first if not.
+          </p>
+        </div>
+
+        <Field label="Destination Project *">
+          <select className="input" value={destProjectId} onChange={e => setDestProjectId(e.target.value)} autoFocus>
+            <option value="">Pick a project</option>
+            {projects.filter(p => p.id !== currentProjectId).map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Amount (₹) *">
+          <input className="input" type="number" placeholder="0" value={amount}
+            onChange={e => setAmount(e.target.value)} />
+        </Field>
+
+        <Field label="Date">
+          <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} />
+        </Field>
+
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2}
+            placeholder={destProject ? `e.g. Profit + capital from completed project → ${destProject.name}` : 'Optional…'}
+            value={notes} onChange={e => setNotes(e.target.value)} />
+        </Field>
+
+        {destProject && amount > 0 && (
+          <div className="bg-gray-50 rounded-xl p-3 text-xs space-y-1.5">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Preview</p>
+            <div className="flex justify-between"><span className="text-red-500">− Refund here</span><span className="font-mono font-semibold">{inr(parseFloat(amount))}</span></div>
+            <div className="flex justify-between"><span className="text-emerald-600">+ Top-up on {destProject.name}</span><span className="font-mono font-semibold">{inr(parseFloat(amount))}</span></div>
+            <p className="text-[10px] text-gray-400 pt-1 border-t border-gray-200">Both rows are linked so the move is traceable from either side.</p>
+          </div>
+        )}
       </div>
     </Sheet>
   )

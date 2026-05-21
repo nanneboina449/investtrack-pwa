@@ -323,13 +323,22 @@ export async function deleteExpense(id) {
 export function useInvestorPayments(projectId) {
   return useFetch(async () => {
     if (!projectId) return []
+    // Query the table directly so we can pull the link columns too
+    // (the investor_payment_history view doesn't include them).
     const { data, error } = await supabase
-      .from('investor_payment_history')
-      .select('*')
+      .from('investor_payments')
+      .select('id, investor_id, project_id, amount, payment_type, payment_date, notes, expense_id, source_project_id, source_investor_id, destination_project_id, destination_investor_id, investors(name, share_percent), project_expenses(category, description)')
       .eq('project_id', projectId)
       .order('payment_date', { ascending: false })
     if (error) throw error
-    return data
+    // Flatten the embedded shapes so the UI keeps reading the same fields
+    return (data ?? []).map(r => ({
+      ...r,
+      investor_name:       r.investors?.name ?? null,
+      share_percent:       r.investors?.share_percent ?? null,
+      expense_category:    r.project_expenses?.category ?? null,
+      expense_description: r.project_expenses?.description ?? null,
+    }))
   }, [projectId])
 }
 
@@ -343,6 +352,18 @@ export async function createPayment(values) {
 export async function deletePayment(id) {
   const { error } = await supabase.from('investor_payments').delete().eq('id', id)
   if (error) throw error
+}
+
+export async function reallocateInvestorPosition({ sourceInvestorId, destProjectId, amount, date, notes }) {
+  const { data, error } = await supabase.rpc('reallocate_investor_position', {
+    p_source_investor_id: sourceInvestorId,
+    p_dest_project_id:    destProjectId,
+    p_amount:             amount,
+    p_date:               isoDate(date),
+    p_notes:              notes ?? null,
+  })
+  if (error) throw error
+  return data
 }
 
 // ── Cross-project investor summary (for the owner's dashboard) ──
