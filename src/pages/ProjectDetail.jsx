@@ -518,6 +518,14 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
     }
   }
 
+  const handleAmount = (v) => {
+    set('amount_invested', v)
+    if (mode === 'custom_amount' && projectValue > 0) {
+      const derivedShare = ((parseFloat(v)||0) / projectValue) * 100
+      set('share_percent', derivedShare ? derivedShare.toFixed(2) : '')
+    }
+  }
+
   const submit = async () => {
     const p = parseFloat(form.share_percent)
     if (!form.name)              { setError('Name is required'); return }
@@ -589,7 +597,7 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
           />
           <p className="text-[11px] text-gray-500 mt-2 px-1">
             {isCustomMode
-              ? 'Enter the actual amount each investor put in. Share % drives profit split — they can be unequal.'
+              ? 'Enter the actual amount; share % auto-derives from amount / pool. Override the share to make profit splits unequal (e.g., equal share despite different amounts).'
               : 'Share % auto-fills the committed amount from the project pool. Everyone\'s commitment scales with their share.'}
           </p>
         </div>
@@ -618,14 +626,14 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
               <Field label="Committed Amount (₹) *">
                 <input className="input" type="number" placeholder="0"
                   value={form.amount_invested}
-                  onChange={e => set('amount_invested', e.target.value)} autoFocus />
-                <p className="text-[10px] text-gray-400 mt-1">Their actual contribution to the pool.</p>
+                  onChange={e => handleAmount(e.target.value)} autoFocus />
+                <p className="text-[10px] text-gray-400 mt-1">Their actual contribution. Share % derives from amount / pool.</p>
               </Field>
               <Field label="Profit Share % *">
                 <input className="input" type="number" step="0.01" min="0.01"
-                  max={remainingShare} placeholder="33.33"
-                  value={form.share_percent} onChange={e => handleShare(e.target.value)} />
-                <p className="text-[10px] text-gray-400 mt-1">Independent of amount. Drives profit / expense split.</p>
+                  max={remainingShare} placeholder="auto"
+                  value={form.share_percent} onChange={e => set('share_percent', e.target.value)} />
+                <p className="text-[10px] text-gray-400 mt-1">Auto from amount. Override for unequal splits.</p>
               </Field>
             </>
           ) : (
