@@ -116,6 +116,11 @@ export async function deleteInvestor(id) {
   if (error) throw error
 }
 
+export async function updateInvestor(id, values) {
+  const { error } = await supabase.from('investors').update(values).eq('id', id)
+  if (error) throw error
+}
+
 // ── Profit Records ────────────────────────────────────────────
 export function useProfitRecords(projectId) {
   return useFetch(async () => {
@@ -142,6 +147,34 @@ export async function createProfitRecord(values) {
   })
   if (error) throw error
   return data
+}
+
+export async function updateProfitRecord(id, values) {
+  // Fetch current amount to detect change so we can scale distributions
+  const { data: prRow, error: prErr } = await supabase
+    .from('profit_records').select('amount').eq('id', id).single()
+  if (prErr) throw prErr
+
+  const oldAmount = Number(prRow.amount || 0)
+  const fields = {
+    ...(values.amount      !== undefined ? { amount: values.amount } : {}),
+    ...(values.record_date !== undefined ? { record_date: isoDate(values.record_date) } : {}),
+    ...(values.notes       !== undefined ? { notes: values.notes } : {}),
+  }
+  const { error } = await supabase.from('profit_records').update(fields).eq('id', id)
+  if (error) throw error
+
+  // If amount changed, scale all profit_distributions for this record proportionally
+  if (values.amount !== undefined && Number(values.amount) !== oldAmount && oldAmount > 0) {
+    const ratio = Number(values.amount) / oldAmount
+    const { data: dists } = await supabase
+      .from('profit_distributions').select('id, amount').eq('profit_id', id)
+    for (const d of (dists ?? [])) {
+      await supabase.from('profit_distributions')
+        .update({ amount: Math.round(Number(d.amount) * ratio * 100) / 100 })
+        .eq('id', d.id)
+    }
+  }
 }
 
 export async function deleteProfitRecord(id) {
@@ -232,6 +265,33 @@ export async function markSettled(id) {
   if (error) throw error
 }
 
+export async function updateLoan(id, values) {
+  // Allowed fields on a loan transaction. Contributions / repayments
+  // aren't touched here — those are separate edits.
+  const allow = ['description', 'counterparty', 'amount', 'interest_rate_percent', 'adjustment_date', 'notes']
+  const fields = {}
+  for (const k of allow) {
+    if (values[k] !== undefined) {
+      fields[k] = k === 'adjustment_date' ? isoDate(values[k]) : values[k]
+    }
+  }
+  const { error } = await supabase.from('cash_adjustments').update(fields).eq('id', id)
+  if (error) throw error
+}
+
+export async function updateCashAdjustment(id, values) {
+  // Generic update for non-loan adjustments (deposit / withdrawal / reallocation)
+  const allow = ['description', 'counterparty', 'amount', 'adjustment_date', 'notes']
+  const fields = {}
+  for (const k of allow) {
+    if (values[k] !== undefined) {
+      fields[k] = k === 'adjustment_date' ? isoDate(values[k]) : values[k]
+    }
+  }
+  const { error } = await supabase.from('cash_adjustments').update(fields).eq('id', id)
+  if (error) throw error
+}
+
 // ── Investor Running Balance ───────────────────────────────────
 export function useInvestorBalances(projectId) {
   return useFetch(async () => {
@@ -319,6 +379,51 @@ export async function deleteExpense(id) {
   if (error) throw error
 }
 
+export async function updateExpense(id, values) {
+  // Sync the linked investor_payment when amount, paid_by, or date changes.
+  const { data: oldRow, error: e1 } = await supabase
+    .from('project_expenses')
+    .select('amount, paid_by_investor_id, expense_date, category, description, project_id')
+    .eq('id', id).single()
+  if (e1) throw e1
+
+  const fields = { ...values }
+  if (fields.expense_date !== undefined) fields.expense_date = isoDate(fields.expense_date)
+  const { error } = await supabase.from('project_expenses').update(fields).eq('id', id)
+  if (error) throw error
+
+  // Find the linked payment created by the expense-to-payment trigger
+  const { data: linkedPayment } = await supabase
+    .from('investor_payments').select('id').eq('expense_id', id).maybeSingle()
+
+  const newPaidBy = values.paid_by_investor_id !== undefined ? values.paid_by_investor_id : oldRow.paid_by_investor_id
+  const newAmount = values.amount !== undefined ? values.amount : oldRow.amount
+  const newDate   = values.expense_date !== undefined ? isoDate(values.expense_date) : oldRow.expense_date
+
+  if (linkedPayment && newPaidBy) {
+    // Update the linked payment to match new values
+    await supabase.from('investor_payments').update({
+      investor_id:  newPaidBy,
+      amount:       newAmount,
+      payment_date: newDate,
+    }).eq('id', linkedPayment.id)
+  } else if (linkedPayment && !newPaidBy) {
+    // Was paid by investor, now no payer — drop the payment
+    await supabase.from('investor_payments').delete().eq('id', linkedPayment.id)
+  } else if (!linkedPayment && newPaidBy) {
+    // Was project-funded, now paid by an investor — create the payment
+    await supabase.from('investor_payments').insert({
+      investor_id:  newPaidBy,
+      project_id:   oldRow.project_id,
+      amount:       newAmount,
+      payment_type: 'expense_paid',
+      expense_id:   id,
+      payment_date: newDate,
+      notes:        'Paid expense (edited)',
+    })
+  }
+}
+
 // ── Investor Payments (per-project ledger) ────────────────────
 export function useInvestorPayments(projectId) {
   return useFetch(async () => {
@@ -352,6 +457,54 @@ export async function createPayment(values) {
 export async function deletePayment(id) {
   const { error } = await supabase.from('investor_payments').delete().eq('id', id)
   if (error) throw error
+}
+
+export async function updatePayment(id, values) {
+  // Safe to edit: amount, date, notes. payment_type is fixed; if you
+  // need to change the type, delete and re-create.
+  const allow = ['amount', 'payment_date', 'notes']
+  const fields = {}
+  for (const k of allow) {
+    if (values[k] !== undefined) {
+      fields[k] = k === 'payment_date' ? isoDate(values[k]) : values[k]
+    }
+  }
+  const { error } = await supabase.from('investor_payments').update(fields).eq('id', id)
+  if (error) throw error
+}
+
+// For a "move" (refund + linked top_up paired via destination/source columns),
+// update both sides together. Pass the refund payment id; we'll find the
+// matching top_up via the destination link.
+export async function updateMove({ refundId, amount, notes, date }) {
+  const { data: refund, error: e1 } = await supabase
+    .from('investor_payments')
+    .select('id, investor_id, project_id, destination_investor_id, destination_project_id')
+    .eq('id', refundId).single()
+  if (e1) throw e1
+  if (!refund.destination_investor_id || !refund.destination_project_id) {
+    throw new Error('This payment is not part of a linked move')
+  }
+  const { data: topup, error: e2 } = await supabase
+    .from('investor_payments')
+    .select('id')
+    .eq('investor_id', refund.destination_investor_id)
+    .eq('project_id', refund.destination_project_id)
+    .eq('source_investor_id', refund.investor_id)
+    .eq('source_project_id', refund.project_id)
+    .maybeSingle()
+  if (e2) throw e2
+
+  const fields = {}
+  if (amount !== undefined) fields.amount = amount
+  if (notes  !== undefined) fields.notes = notes
+  if (date   !== undefined) fields.payment_date = isoDate(date)
+
+  if (Object.keys(fields).length === 0) return
+  await supabase.from('investor_payments').update(fields).eq('id', refund.id)
+  if (topup?.id) {
+    await supabase.from('investor_payments').update(fields).eq('id', topup.id)
+  }
 }
 
 export async function reallocateInvestorPosition({ sourceInvestorId, destProjectId, amount, date, notes }) {

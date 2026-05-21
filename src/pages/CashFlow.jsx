@@ -1,6 +1,6 @@
 // src/pages/CashFlow.jsx
 import { useState } from 'react'
-import { useCashFlow, useLoans, useProjects, useInvestors, createLoan, recordRepayment, markSettled, reallocateInvestorPosition } from '../hooks/useData'
+import { useCashFlow, useLoans, useProjects, useInvestors, createLoan, recordRepayment, markSettled, reallocateInvestorPosition, updateLoan, updateCashAdjustment } from '../hooks/useData'
 import { inr, isoDate } from '../lib/supabase'
 import { Sheet, Field, SegControl, Spinner, Empty, ProgressBar, useToast } from '../components/ui'
 
@@ -21,6 +21,7 @@ export default function CashFlow() {
   const [tab, setTab]           = useState('all')
   const [showAdd, setShowAdd]   = useState(false)
   const [activeLoan, setActiveLoan] = useState(null)
+  const [editingTx, setEditingTx]   = useState(null)
 
   // Compute net balance
   const net = cashflow.data.reduce((sum, a) => {
@@ -97,6 +98,9 @@ export default function CashFlow() {
                     <button onClick={() => setActiveLoan(a)} className="text-xs bg-blue-50 text-blue-700 font-semibold px-3 py-1.5 rounded-lg flex-1">
                       Record Repayment
                     </button>
+                    <button onClick={() => setEditingTx(a)} className="text-xs bg-gray-100 text-gray-700 font-semibold px-3 py-1.5 rounded-lg">
+                      ✎ Edit
+                    </button>
                     <button onClick={() => handleSettle(a.id)} className="text-xs bg-emerald-50 text-emerald-700 font-semibold px-3 py-1.5 rounded-lg">
                       Settle ✓
                     </button>
@@ -150,6 +154,7 @@ export default function CashFlow() {
                       <p className={`font-bold mono text-sm flex-shrink-0 ${meta?.debit ? 'text-red-600' : a.type==='reallocation' ? 'text-blue-600' : 'text-emerald-600'}`}>
                         {meta?.debit ? '−' : a.type==='reallocation' ? '±' : '+'}{inr(a.amount)}
                       </p>
+                      <button onClick={() => setEditingTx(a)} className="text-gray-300 hover:text-gray-600 text-xs ml-2 flex-shrink-0">✎</button>
                     </div>
                     {/* Loan contributions summary */}
                     {loanDetail?.contributions && loanDetail.contributions.length > 0 && (
@@ -178,6 +183,15 @@ export default function CashFlow() {
         projects={projects.data}
         onSaved={() => { setShowAdd(false); cashflow.reload(); loans.reload(); show('Transaction recorded!') }}
       />
+
+      {/* Edit transaction sheet */}
+      {editingTx && (
+        <EditTransactionSheet
+          tx={editingTx}
+          onClose={() => setEditingTx(null)}
+          onSaved={() => { setEditingTx(null); cashflow.reload(); loans.reload(); show('Transaction updated') }}
+        />
+      )}
 
       {/* Record repayment sheet */}
       {activeLoan && (
@@ -418,6 +432,79 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
         {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
         <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save Transaction'}</button>
       </form>
+    </Sheet>
+  )
+}
+
+// ── Edit Transaction Sheet ────────────────────────────────────
+function EditTransactionSheet({ tx, onClose, onSaved }) {
+  const isLoan = tx.type === 'loan_given' || tx.type === 'loan_received'
+  const [form, setForm] = useState({
+    description:           tx.description ?? '',
+    counterparty:          tx.counterparty ?? '',
+    amount:                tx.amount ?? '',
+    interest_rate_percent: tx.interest_rate_percent ?? '',
+    adjustment_date:       tx.adjustment_date ?? isoDate(),
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const submit = async () => {
+    setSaving(true); setError(null)
+    try {
+      const payload = {
+        description:     form.description,
+        counterparty:    form.counterparty || null,
+        amount:          parseFloat(form.amount),
+        adjustment_date: form.adjustment_date,
+      }
+      if (isLoan) {
+        payload.interest_rate_percent = parseFloat(form.interest_rate_percent) || 0
+        await updateLoan(tx.id, payload)
+      } else {
+        await updateCashAdjustment(tx.id, payload)
+      }
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={true} onClose={onClose}
+      title={`Edit ${tx.type === 'loan_given' ? 'Loan Given' : tx.type === 'loan_received' ? 'Loan Received' : tx.type === 'reallocation' ? 'Reallocation' : 'Transaction'}`}
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button>
+        </div>
+      }>
+      <div className="space-y-4">
+        {isLoan && (
+          <Field label={tx.type === 'loan_given' ? 'Borrower Name' : 'Lender Name'}>
+            <input className="input" value={form.counterparty} onChange={e => set('counterparty', e.target.value)} />
+          </Field>
+        )}
+        <Field label="Description">
+          <input className="input" value={form.description} onChange={e => set('description', e.target.value)} />
+        </Field>
+        <Field label="Amount (₹) *">
+          <input className="input" type="number" value={form.amount} onChange={e => set('amount', e.target.value)} />
+          {isLoan && <p className="text-[10px] text-amber-600 mt-1">Editing principal does NOT redistribute existing contributions or repayments.</p>}
+        </Field>
+        {isLoan && (
+          <Field label="Interest Rate (flat %)">
+            <input className="input" type="number" step="0.01" value={form.interest_rate_percent} onChange={e => set('interest_rate_percent', e.target.value)} />
+          </Field>
+        )}
+        <Field label="Date">
+          <input className="input" type="date" value={form.adjustment_date} onChange={e => set('adjustment_date', e.target.value)} />
+        </Field>
+        {tx.type === 'reallocation' && (
+          <p className="text-[10px] text-amber-600 bg-amber-50 rounded-lg p-2">
+            This edits the cash-flow summary row only. The linked refund/top-up on the investor payment ledger is edited separately — open the source project&apos;s Payments tab.
+          </p>
+        )}
+      </div>
     </Sheet>
   )
 }
