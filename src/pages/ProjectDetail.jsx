@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  useInvestors, useInvestorBalances, useProfitRecords, useExpenses, useInvestorPayments,
+  useInvestors, useInvestorBalances, useProfitRecords, useExpenses, useInvestorPayments, useProfitDistributions,
   createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord,
   createExpense, deleteExpense, createPayment, deletePayment,
   updateProject, deleteProject
@@ -21,11 +21,12 @@ export default function ProjectDetail() {
   const [showMenu, setShowMenu]   = useState(false)
   const [showEdit, setShowEdit]   = useState(false)
 
-  const investors = useInvestors(id)
-  const balances  = useInvestorBalances(id)
-  const profits   = useProfitRecords(id)
-  const expenses  = useExpenses(id)
-  const payments  = useInvestorPayments(id)
+  const investors      = useInvestors(id)
+  const balances       = useInvestorBalances(id)
+  const profits        = useProfitRecords(id)
+  const expenses       = useExpenses(id)
+  const payments       = useInvestorPayments(id)
+  const distributions  = useProfitDistributions(id)
 
   const [showAddInv, setShowAddInv]         = useState(false)
   const [showAddProfit, setShowAddProfit]   = useState(false)
@@ -320,29 +321,46 @@ export default function ProjectDetail() {
               <Empty icon="💰" title="No profit records"
                 action={canEdit && <button onClick={() => setShowAddProfit(true)} className="btn-primary text-sm px-5 py-2.5">Add First Record</button>} />
             ) : (
-              profits.data.map(rec => (
-                <div key={rec.id} className="card p-4">
-                  <div className="flex justify-between items-center mb-3">
-                    <div>
-                      <p className="font-bold text-emerald-600 mono">{inr(rec.amount)}</p>
-                      {rec.notes && <p className="text-xs text-gray-400 mt-0.5">{rec.notes}</p>}
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400">{new Date(rec.record_date).toLocaleDateString('en-IN')}</p>
-                      {isOwner && <button onClick={() => handleDeleteProfit(rec.id)} className="text-xs text-red-400 mt-1">delete</button>}
-                    </div>
-                  </div>
-                  <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
-                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Distributed to</p>
-                    {investors.data.map(inv => (
-                      <div key={inv.investor_id} className="flex justify-between text-xs">
-                        <span className="text-gray-500">{inv.investor_name} ({inv.share_percent}%)</span>
-                        <span className="font-semibold text-emerald-600 mono">{inr(rec.amount * inv.share_percent / 100)}</span>
+              profits.data.map(rec => {
+                const recDists = distributions.data.filter(d => d.profit_id === rec.id)
+                // Detect "custom" split: any distribution diverges materially from proportional
+                const isCustom = recDists.some(d => {
+                  const inv = investors.data.find(i => i.investor_id === d.investor_id)
+                  if (!inv) return false
+                  const proportional = rec.amount * inv.share_percent / 100
+                  return Math.abs(d.amount - proportional) > 0.5
+                })
+                return (
+                  <div key={rec.id} className="card p-4">
+                    <div className="flex justify-between items-center mb-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="font-bold text-emerald-600 mono">{inr(rec.amount)}</p>
+                          {isCustom && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-purple-50 text-purple-700">custom split</span>}
+                        </div>
+                        {rec.notes && <p className="text-xs text-gray-400 mt-0.5">{rec.notes}</p>}
                       </div>
-                    ))}
+                      <div className="text-right">
+                        <p className="text-xs text-gray-400">{new Date(rec.record_date).toLocaleDateString('en-IN')}</p>
+                        {isOwner && <button onClick={() => handleDeleteProfit(rec.id)} className="text-xs text-red-400 mt-1">delete</button>}
+                      </div>
+                    </div>
+                    <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
+                      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Distributed to</p>
+                      {investors.data.map(inv => {
+                        const dist = recDists.find(d => d.investor_id === inv.investor_id)
+                        const amount = dist ? dist.amount : rec.amount * inv.share_percent / 100
+                        return (
+                          <div key={inv.investor_id} className="flex justify-between text-xs">
+                            <span className="text-gray-500">{inv.investor_name} ({inv.share_percent}%)</span>
+                            <span className="font-semibold text-emerald-600 mono">{inr(amount)}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))
+                )
+              })
             )}
           </>
         )}
@@ -471,8 +489,8 @@ export default function ProjectDetail() {
       {/* Add Profit Sheet */}
       {canEdit && (
         <AddProfitSheet open={showAddProfit} onClose={() => setShowAddProfit(false)}
-          projectId={id}
-          onSaved={() => { setShowAddProfit(false); profits.reload(); investors.reload(); show('Profit recorded!') }} />
+          projectId={id} investors={investors.data}
+          onSaved={() => { setShowAddProfit(false); profits.reload(); investors.reload(); distributions.reload(); balances.reload(); show('Profit recorded!') }} />
       )}
 
       {/* Add Expense Sheet */}
@@ -506,7 +524,7 @@ export default function ProjectDetail() {
 
 function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotalValue, stakePercent, remainingShare, onSaved }) {
   const [form, setForm] = useState({ name: '', email: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
-  const [mode, setMode] = useState('share_split') // 'share_split' or 'custom_amount'
+  const [mode, setMode] = useState('share_split') // 'share_split' | 'custom_amount' | 'fully_manual'
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
@@ -553,10 +571,12 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
     } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
 
-  const computedAmt  = ((parseFloat(form.share_percent)||0) * projectValue / 100)
-  const enteredAmt   = parseFloat(form.amount_invested) || 0
-  const sharePct     = parseFloat(form.share_percent) || 0
-  const isCustomMode = mode === 'custom_amount'
+  const computedAmt   = ((parseFloat(form.share_percent)||0) * projectValue / 100)
+  const enteredAmt    = parseFloat(form.amount_invested) || 0
+  const sharePct      = parseFloat(form.share_percent) || 0
+  const isCustomMode  = mode === 'custom_amount'
+  const isManualMode  = mode === 'fully_manual'
+  const hasAutoFill   = mode === 'share_split' || mode === 'custom_amount'
 
   return (
     <Sheet
@@ -566,16 +586,16 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
       footer={
         <div className="space-y-2">
           {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
-          {!isCustomMode && form.share_percent && (
+          {mode === 'share_split' && form.share_percent && (
             <div className="flex items-center justify-between text-xs text-brand-700 bg-brand-50 rounded-xl px-3 py-2">
               <span>Auto-filled from pool</span>
               <span className="font-bold mono">{inr(computedAmt)}</span>
             </div>
           )}
-          {isCustomMode && enteredAmt > 0 && sharePct > 0 && (
+          {mode !== 'share_split' && enteredAmt > 0 && sharePct > 0 && (
             <div className="flex items-center justify-between text-xs text-purple-700 bg-purple-50 rounded-xl px-3 py-2">
               <span>{sharePct}% profit on ₹{(enteredAmt/1000).toFixed(0)}k contribution</span>
-              <span className="font-bold mono">custom split</span>
+              <span className="font-bold mono">{isManualMode ? 'manual' : 'custom split'}</span>
             </div>
           )}
           <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>
@@ -593,10 +613,13 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
             options={[
               { value: 'share_split',   label: 'Share Split' },
               { value: 'custom_amount', label: 'Custom Amount' },
+              { value: 'fully_manual',  label: 'Manual' },
             ]}
           />
           <p className="text-[11px] text-gray-500 mt-2 px-1">
-            {isCustomMode
+            {isManualMode
+              ? 'Type both fields independently. No auto-fill — use this when amount and profit share have no fixed relationship.'
+              : isCustomMode
               ? 'Enter the actual amount; share % auto-derives from amount / pool. Override the share to make profit splits unequal (e.g., equal share despite different amounts).'
               : 'Share % auto-fills the committed amount from the project pool. Everyone\'s commitment scales with their share.'}
           </p>
@@ -621,22 +644,7 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
-          {isCustomMode ? (
-            <>
-              <Field label="Committed Amount (₹) *">
-                <input className="input" type="number" placeholder="0"
-                  value={form.amount_invested}
-                  onChange={e => handleAmount(e.target.value)} autoFocus />
-                <p className="text-[10px] text-gray-400 mt-1">Their actual contribution. Share % derives from amount / pool.</p>
-              </Field>
-              <Field label="Profit Share % *">
-                <input className="input" type="number" step="0.01" min="0.01"
-                  max={remainingShare} placeholder="auto"
-                  value={form.share_percent} onChange={e => set('share_percent', e.target.value)} />
-                <p className="text-[10px] text-gray-400 mt-1">Auto from amount. Override for unequal splits.</p>
-              </Field>
-            </>
-          ) : (
+          {mode === 'share_split' ? (
             <>
               <Field label="Share % *">
                 <input className="input" type="number" step="0.01" min="0.01"
@@ -648,6 +656,26 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
                   value={form.amount_invested}
                   onChange={e => set('amount_invested', e.target.value)} />
                 <p className="text-[10px] text-gray-400 mt-1">Auto-filled from share. Editable.</p>
+              </Field>
+            </>
+          ) : (
+            <>
+              <Field label="Committed Amount (₹) *">
+                <input className="input" type="number" placeholder="0"
+                  value={form.amount_invested}
+                  onChange={e => handleAmount(e.target.value)} autoFocus />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  {isManualMode ? 'Their contribution. No auto-fill.' : 'Their actual contribution. Share % derives from amount / pool.'}
+                </p>
+              </Field>
+              <Field label="Profit Share % *">
+                <input className="input" type="number" step="0.01" min="0.01"
+                  max={remainingShare}
+                  placeholder={isManualMode ? '33.33' : 'auto'}
+                  value={form.share_percent} onChange={e => set('share_percent', e.target.value)} />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  {isManualMode ? 'Type manually. Drives profit / expense split.' : 'Auto from amount. Override for unequal splits.'}
+                </p>
               </Field>
             </>
           )}
@@ -674,18 +702,51 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
   )
 }
 
-function AddProfitSheet({ open, onClose, projectId, onSaved }) {
-  const [form, setForm] = useState({ amount: '', record_date: isoDate(), notes: '' })
+function AddProfitSheet({ open, onClose, projectId, investors = [], onSaved }) {
+  const [form, setForm]     = useState({ amount: '', record_date: isoDate(), notes: '' })
+  const [splitMode, setSplitMode] = useState('default') // 'default' or 'custom'
+  const [customDist, setCustomDist] = useState({}) // { [investor_id]: amount }
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState(null)
+  const [error, setError]   = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
-  const submit = async (e) => {
-    e.preventDefault()
+  const amount = parseFloat(form.amount) || 0
+  const isCustom = splitMode === 'custom'
+
+  // When switching to custom or amount changes, seed proportional defaults so user can tweak from there
+  const seedCustomFromProportional = (amt) => {
+    const seeded = {}
+    for (const inv of investors) {
+      seeded[inv.investor_id] = Math.round(amt * (inv.share_percent || 0) / 100)
+    }
+    setCustomDist(seeded)
+  }
+
+  const setCustomAmount = (investorId, v) => {
+    setCustomDist(prev => ({ ...prev, [investorId]: parseFloat(v) || 0 }))
+  }
+
+  const customTotal = Object.values(customDist).reduce((s, v) => s + (Number(v) || 0), 0)
+  const customMatch = Math.abs(customTotal - amount) < 1
+
+  const submit = async () => {
+    if (!amount) { setError('Amount required'); return }
+    if (isCustom && !customMatch) { setError(`Custom amounts must sum to ${form.amount}`); return }
     setSaving(true); setError(null)
     try {
-      await createProfitRecord({ project_id: projectId, amount: parseFloat(form.amount), record_date: form.record_date, notes: form.notes || null })
+      const distributions = isCustom
+        ? investors.map(inv => ({ investor_id: inv.investor_id, amount: customDist[inv.investor_id] || 0 }))
+        : null
+      await createProfitRecord({
+        project_id:    projectId,
+        amount,
+        record_date:   form.record_date,
+        notes:         form.notes || null,
+        distributions,
+      })
       setForm({ amount: '', record_date: isoDate(), notes: '' })
+      setCustomDist({})
+      setSplitMode('default')
       onSaved()
     } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
@@ -700,17 +761,66 @@ function AddProfitSheet({ open, onClose, projectId, onSaved }) {
           </button>
         </div>
       }>
-      <form onSubmit={submit} className="space-y-4">
+      <div className="space-y-4">
         <Field label="Profit Amount (₹) *">
-          <input className="input" type="number" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} required autoFocus />
+          <input className="input" type="number" placeholder="0" value={form.amount}
+            onChange={e => {
+              set('amount', e.target.value)
+              if (isCustom) seedCustomFromProportional(parseFloat(e.target.value) || 0)
+            }} autoFocus />
         </Field>
+
+        <div>
+          <label className="label">Split</label>
+          <SegControl
+            value={splitMode}
+            onChange={(v) => {
+              setSplitMode(v)
+              if (v === 'custom') seedCustomFromProportional(amount)
+            }}
+            options={[
+              { value: 'default', label: 'By share %' },
+              { value: 'custom',  label: 'Custom' },
+            ]}
+          />
+          <p className="text-[11px] text-gray-500 mt-2 px-1">
+            {isCustom
+              ? 'Type each investor\'s portion. Amounts must sum to the total.'
+              : 'Splits proportionally by each investor\'s share %.'}
+          </p>
+        </div>
+
+        {isCustom && investors.length > 0 && (
+          <div>
+            <label className="label">Per-Investor Amount</label>
+            <div className="space-y-2">
+              {investors.map(inv => (
+                <div key={inv.investor_id} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2">
+                  <span className="text-sm text-gray-700 flex-1">{inv.investor_name}
+                    <span className="text-xs text-gray-400 ml-1">({inv.share_percent}%)</span>
+                  </span>
+                  <span className="text-gray-400 text-sm">₹</span>
+                  <input type="number"
+                    className="w-28 bg-white border border-gray-200 rounded-lg px-2 py-1 text-sm text-right font-mono"
+                    value={customDist[inv.investor_id] ?? ''}
+                    onChange={e => setCustomAmount(inv.investor_id, e.target.value)} />
+                </div>
+              ))}
+              <div className={`flex justify-between text-xs px-1 font-semibold ${customMatch ? 'text-emerald-600' : 'text-red-500'}`}>
+                <span>Total distributed</span>
+                <span>{inr(customTotal)} / {inr(amount)} {customMatch ? '✓' : '✗'}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         <Field label="Date">
           <input className="input" type="date" value={form.record_date} onChange={e => set('record_date', e.target.value)} />
         </Field>
         <Field label="Notes">
           <textarea className="input resize-none" rows={2} placeholder="e.g. Q1 rental income" value={form.notes} onChange={e => set('notes', e.target.value)} />
         </Field>
-      </form>
+      </div>
     </Sheet>
   )
 }
