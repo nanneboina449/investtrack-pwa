@@ -173,102 +173,42 @@ create policy "payments_delete" on investor_payments
 grant all privileges on investor_payments to authenticated, service_role;
 
 -- ============================================================
--- 7. Updated views: amount_invested now comes from the ledger
--- (refunds subtract; everything else adds)
+-- 7. Trigger: keep investors.amount_invested in sync with the ledger
+--
+-- Rather than rewriting the existing views (which Postgres refuses via
+-- `create or replace view` when column types differ), we keep the views
+-- untouched and instead maintain the underlying `investors.amount_invested`
+-- column from the payment ledger. The existing views already read this
+-- column, so they automatically reflect top-ups, refunds, expense-paid
+-- credits — without any view DDL.
 -- ============================================================
+create or replace function sync_amount_invested()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_investor_id uuid;
+begin
+  v_investor_id := coalesce(NEW.investor_id, OLD.investor_id);
 
-create or replace view investor_profit_summary as
-select
-  i.id                                                              as investor_id,
-  i.project_id,
-  i.name                                                            as investor_name,
-  i.share_percent,
-  coalesce(
+  update investors
+  set amount_invested = coalesce(
     (select sum(case when payment_type = 'refund' then -amount else amount end)
-     from investor_payments where investor_id = i.id),
-    i.amount_invested
-  )::numeric(15,2)                                                  as amount_invested,
-  p.name                                                            as project_name,
-  p.status                                                          as project_status,
-  p.total_value,
-  p.our_stake_percent,
-  round(p.total_value * p.our_stake_percent / 100, 2)              as our_pool_value,
-  coalesce(
-    (select sum(pr.amount * i.share_percent / 100)
-     from profit_records pr where pr.project_id = i.project_id), 0
-  )                                                                 as total_profit_allocated,
-  coalesce(
-    (select sum(pe.amount * i.share_percent / 100)
-     from project_expenses pe where pe.project_id = i.project_id), 0
-  )                                                                 as total_expenses_allocated,
-  coalesce(
-    (select sum(pr.amount * i.share_percent / 100)
-     from profit_records pr where pr.project_id = i.project_id), 0
-  ) -
-  coalesce(
-    (select sum(pe.amount * i.share_percent / 100)
-     from project_expenses pe where pe.project_id = i.project_id), 0
-  )                                                                 as net_return,
-  coalesce(
-    (select sum(case when payment_type = 'refund' then -amount else amount end)
-     from investor_payments where investor_id = i.id),
-    i.amount_invested
-  ) +
-  coalesce(
-    (select sum(pr.amount * i.share_percent / 100)
-     from profit_records pr where pr.project_id = i.project_id), 0
-  ) -
-  coalesce(
-    (select sum(pe.amount * i.share_percent / 100)
-     from project_expenses pe where pe.project_id = i.project_id), 0
-  )                                                                 as current_value
-from investors i
-join projects p on p.id = i.project_id;
+     from investor_payments
+     where investor_id = v_investor_id), 0
+  )
+  where id = v_investor_id;
 
-create or replace view investor_running_balance as
-select
-  i.id            as investor_id,
-  i.project_id,
-  i.name          as investor_name,
-  p.name          as project_name,
-  coalesce(
-    (select sum(case when payment_type = 'refund' then -amount else amount end)
-     from investor_payments where investor_id = i.id),
-    i.amount_invested
-  )::numeric(15,2) as amount_invested,
-  i.share_percent,
-  coalesce(
-    (select sum(pr.amount * i.share_percent / 100)
-     from profit_records pr where pr.project_id = i.project_id), 0
-  ) as profit_allocated,
-  coalesce(
-    (select sum(pe.amount * i.share_percent / 100)
-     from project_expenses pe where pe.project_id = i.project_id), 0
-  ) as total_expenses_allocated,
-  coalesce(
-    (select sum(lc.amount)
-     from loan_contributions lc
-     join cash_adjustments ca on ca.id = lc.loan_id
-     where lc.investor_id = i.id and ca.type = 'loan_given' and ca.is_settled = false), 0
-  ) as money_loaned_out,
-  coalesce(
-    (select sum(rd.amount_returned)
-     from repayment_distributions rd
-     join loan_repayments lr on lr.id = rd.repayment_id
-     join loan_contributions lc on lc.id = rd.loan_contribution_id
-     join cash_adjustments ca on ca.id = lc.loan_id
-     where lc.investor_id = i.id and lr.repayment_type = 'cash'), 0
-  ) as money_repaid_received,
-  coalesce(
-    (select sum(rd.amount_returned)
-     from repayment_distributions rd
-     join loan_repayments lr on lr.id = rd.repayment_id
-     join loan_contributions lc on lc.id = rd.loan_contribution_id
-     join cash_adjustments ca on ca.id = lc.loan_id
-     where lc.investor_id = i.id and lr.repayment_type = 'project_adjustment'), 0
-  ) as money_moved_to_projects
-from investors i
-join projects p on p.id = i.project_id;
+  return coalesce(NEW, OLD);
+end;
+$$;
+
+drop trigger if exists payments_to_investor_amount on investor_payments;
+create trigger payments_to_investor_amount
+  after insert or update or delete on investor_payments
+  for each row execute function sync_amount_invested();
 
 -- ============================================================
 -- 8. investor_payment_history view: ready-to-render ledger
