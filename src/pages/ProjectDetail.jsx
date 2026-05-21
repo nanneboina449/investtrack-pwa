@@ -2,12 +2,12 @@
 import { useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  useInvestors, useInvestorBalances, useProfitRecords, useExpenses, useInvestorPayments, useProfitDistributions, useProjects,
+  useInvestors, useInvestorBalances, useProfitRecords, useExpenses, useInvestorPayments, useProfitDistributions, useProjects, useAllInvestors,
   createInvestor, deleteInvestor, updateInvestor,
   createProfitRecord, deleteProfitRecord, updateProfitRecord,
   createExpense, deleteExpense, updateExpense,
   createPayment, deletePayment, updatePayment, updateMove,
-  reallocateInvestorPosition,
+  reallocateInvestorPosition, transferFundsAsLoan,
   updateProject, deleteProject
 } from '../hooks/useData'
 import { useMyRole } from '../hooks/useSharing'
@@ -38,11 +38,14 @@ export default function ProjectDetail() {
   }, [allProjects.data])
 
   const [moveFromInv, setMoveFromInv]   = useState(null)
+  const [lendFromInv, setLendFromInv]   = useState(null)
   const [editInvestor, setEditInvestor] = useState(null)
   const [editProfit, setEditProfit]     = useState(null)
   const [editExpense, setEditExpense]   = useState(null)
   const [editPayment, setEditPayment]   = useState(null)
   const [editMove,    setEditMove]      = useState(null)
+
+  const allInvestors = useAllInvestors()
 
   const [showAddInv, setShowAddInv]         = useState(false)
   const [showAddProfit, setShowAddProfit]   = useState(false)
@@ -225,6 +228,12 @@ export default function ProjectDetail() {
                           <button onClick={() => setMoveFromInv(inv)}
                             className="text-[10px] font-semibold px-2 py-1 rounded-lg bg-blue-50 text-blue-700">
                             ⇄ Move
+                          </button>
+                        )}
+                        {canEdit && (
+                          <button onClick={() => setLendFromInv(inv)}
+                            className="text-[10px] font-semibold px-2 py-1 rounded-lg bg-amber-50 text-amber-700">
+                            ↗ Lend
                           </button>
                         )}
                         {isOwner && (
@@ -609,6 +618,21 @@ export default function ProjectDetail() {
             setMoveFromInv(null)
             payments.reload(); investors.reload(); balances.reload()
             show('Position moved successfully')
+          }}
+        />
+      )}
+
+      {/* Lend to another Investor Sheet */}
+      {canEdit && lendFromInv && (
+        <LendToInvestorSheet
+          source={lendFromInv}
+          allInvestors={allInvestors.data}
+          projectNameById={projectNameById}
+          onClose={() => setLendFromInv(null)}
+          onSaved={() => {
+            setLendFromInv(null)
+            payments.reload(); investors.reload(); balances.reload()
+            show('Loan recorded')
           }}
         />
       )}
@@ -1263,6 +1287,118 @@ function MoveInvestorPositionSheet({ investor, projects = [], currentProjectId, 
             <div className="flex justify-between"><span className="text-red-500">− Refund here</span><span className="font-mono font-semibold">{inr(parseFloat(amount))}</span></div>
             <div className="flex justify-between"><span className="text-emerald-600">+ Top-up on {destProject.name}</span><span className="font-mono font-semibold">{inr(parseFloat(amount))}</span></div>
             <p className="text-[10px] text-gray-400 pt-1 border-t border-gray-200">Both rows are linked so the move is traceable from either side.</p>
+          </div>
+        )}
+      </div>
+    </Sheet>
+  )
+}
+
+// ── Lend to another Investor Sheet (inter-investor loan) ─────
+function LendToInvestorSheet({ source, allInvestors = [], projectNameById = {}, onClose, onSaved }) {
+  const [destInvestorId, setDestInvestorId] = useState('')
+  const [amount, setAmount]                 = useState('')
+  const [interestPct, setInterestPct]       = useState('')
+  const [date, setDate]                     = useState(isoDate())
+  const [notes, setNotes]                   = useState('')
+  const [saving, setSaving]                 = useState(false)
+  const [error, setError]                   = useState(null)
+
+  const dest = allInvestors.find(i => i.id === destInvestorId)
+  const principal = parseFloat(amount) || 0
+  const interest  = parseFloat(interestPct) || 0
+  const totalDue  = principal + (principal * interest / 100)
+
+  // Pickable destinations: everyone except the source
+  const options = allInvestors.filter(i => i.id !== source.investor_id)
+
+  const submit = async () => {
+    if (!destInvestorId) { setError('Pick a destination investor'); return }
+    if (principal <= 0)  { setError('Amount must be positive'); return }
+    setSaving(true); setError(null)
+    try {
+      await transferFundsAsLoan({
+        sourceInvestorId: source.investor_id,
+        destInvestorId,
+        amount: principal,
+        interestPct: interest,
+        date,
+        notes: notes || null,
+      })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={true} onClose={onClose} title="Lend to Another Investor"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>
+            {saving ? 'Recording…' : 'Record Loan'}
+          </button>
+        </div>
+      }>
+      <div className="space-y-4">
+        <div className="bg-amber-50 rounded-xl p-3 text-xs text-amber-800">
+          <p className="font-semibold mb-1">{source.investor_name} → ?</p>
+          <p>A refund lands on {source.investor_name}&apos;s ledger, a top-up on the destination investor&apos;s. A loan record is created so the destination owes the source.</p>
+        </div>
+
+        <Field label="Destination Investor *">
+          <select className="input" value={destInvestorId} onChange={e => setDestInvestorId(e.target.value)} autoFocus>
+            <option value="">Pick a person</option>
+            {options.map(i => (
+              <option key={i.id} value={i.id}>
+                {i.name} · {projectNameById[i.project_id] ?? 'project'}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Amount (₹) *">
+            <input className="input" type="number" placeholder="0" value={amount}
+              onChange={e => setAmount(e.target.value)} />
+          </Field>
+          <Field label="Interest (flat %)">
+            <input className="input" type="number" step="0.01" placeholder="0" value={interestPct}
+              onChange={e => setInterestPct(e.target.value)} />
+          </Field>
+        </div>
+
+        {principal > 0 && interest > 0 && (
+          <div className="bg-blue-50 rounded-xl px-3 py-2 text-xs text-blue-800 flex justify-between">
+            <span>Total due back from borrower</span>
+            <span className="font-bold mono">{inr(totalDue)}</span>
+          </div>
+        )}
+
+        <Field label="Date">
+          <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} />
+        </Field>
+
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2}
+            placeholder="e.g. Profit redeployed from House to fund KCL share"
+            value={notes} onChange={e => setNotes(e.target.value)} />
+        </Field>
+
+        {dest && principal > 0 && (
+          <div className="bg-gray-50 rounded-xl p-3 text-xs space-y-1.5">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Preview</p>
+            <div className="flex justify-between">
+              <span className="text-red-500">− Refund on {source.investor_name} ({projectNameById[source.project_id] ?? 'source'})</span>
+              <span className="font-mono font-semibold">{inr(principal)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-emerald-600">+ Top-up on {dest.name} ({projectNameById[dest.project_id] ?? 'dest'})</span>
+              <span className="font-mono font-semibold">{inr(principal)}</span>
+            </div>
+            <div className="flex justify-between border-t border-gray-200 pt-1">
+              <span className="text-amber-700">+ Loan record (Cash Flow): {dest.name} owes {source.investor_name}</span>
+              <span className="font-mono font-semibold">{inr(totalDue)}</span>
+            </div>
           </div>
         )}
       </div>
