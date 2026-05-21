@@ -431,8 +431,13 @@ export function useAllInvestorsSummary() {
       const cashIn        = cashInByInv[inv.id] ?? 0
       const cashBack      = cashBackByInv[inv.id] ?? 0
 
-      if (!byName[inv.name]) byName[inv.name] = { name: inv.name, projects: [] }
-      byName[inv.name].projects.push({
+      // Normalize for grouping: lowercase, trim, collapse internal whitespace.
+      // Display uses the first record's cleaned name.
+      const cleaned = (inv.name || '').trim().replace(/\s+/g, ' ')
+      const key = cleaned.toLowerCase()
+      if (!key) continue
+      if (!byName[key]) byName[key] = { name: cleaned, projects: [] }
+      byName[key].projects.push({
         investor_id: inv.id,
         project_id:  inv.project_id,
         project_name: proj.name,
