@@ -19,9 +19,9 @@ export default function Projects() {
       <Toast />
 
       {/* Header */}
-      <div className="bg-white border-b border-gray-100 px-5 pt-14 pb-4">
+      <div className="bg-white border-b border-gray-100 px-5 lg:px-8 pt-14 lg:pt-8 pb-4">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-2xl font-bold text-gray-900">Projects</h1>
+          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Projects</h1>
           <button onClick={() => setShowAdd(true)} className="btn-primary text-sm px-4 py-2">
             + New
           </button>
@@ -37,13 +37,13 @@ export default function Projects() {
         />
       </div>
 
-      <div className="px-4 py-4">
+      <div className="px-4 lg:px-8 py-4">
         {loading ? (
           <div className="flex justify-center py-14"><Spinner size="lg" /></div>
         ) : filtered.length === 0 ? (
           <Empty icon="📁" title={`No ${tab} projects`} sub="Tap + New to create one" />
         ) : (
-          <div className="space-y-3">
+          <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
             {filtered.map(p => (
               <div key={p.id} className="card p-4 cursor-pointer active:scale-[0.98] transition-transform"
                 onClick={() => navigate(`/projects/${p.id}`)}>

@@ -226,3 +226,65 @@
     box-shadow: none;
   }
 }
+
+/* ── Desktop layout (≥ 1024px): wide content + sidebar nav ──── */
+@media (min-width: 1024px) {
+  body {
+    background: #f3f4f6;
+  }
+  body::before,
+  body::after {
+    opacity: 0;
+  }
+
+  /* Sheet becomes a centered modal */
+  .sheet-backdrop {
+    width: 100%;
+    left: 0;
+    transform: none;
+    justify-content: center;
+    align-items: center;
+  }
+  .sheet {
+    width: min(560px, 90vw);
+    max-height: 85vh;
+    border-radius: 24px;
+    margin-bottom: 0;
+  }
+  .sheet-handle { display: none; }
+
+  /* Page content needs more breathing room on desktop */
+  .page-enter > div:first-child[class*="pt-14"],
+  .page-enter > div:first-child[class*="pt-12"] {
+    padding-top: 2.5rem !important;
+  }
+}
+
+/* Utility: 2-column grid on desktop for page-level sections */
+.lg-grid-2 {
+  display: block;
+}
+@media (min-width: 1024px) {
+  .lg-grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+  }
+
+  /* Constrain content width on desktop and centre it */
+  .page-enter {
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+
+  /* Tame the giant mobile-style status-bar padding on page headers */
+  .page-enter > div:first-child[class*="pt-14"] {
+    padding-top: 2rem !important;
+  }
+  .page-enter > div:first-child[class*="pt-12"] {
+    padding-top: 2rem !important;
+  }
+
+  /* Cards get a bit more padding for desktop comfort */
+  .card { padding: inherit; }
+}
