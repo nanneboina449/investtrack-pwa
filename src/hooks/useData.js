@@ -345,6 +345,74 @@ export async function deletePayment(id) {
   if (error) throw error
 }
 
+// ── Cross-project investor summary (for the owner's dashboard) ──
+// Aggregates every investor record visible to the user, groups by name,
+// and computes their consolidated position across all projects.
+export function useAllInvestorsSummary() {
+  return useFetch(async () => {
+    const [investorsRes, paymentsRes, distributionsRes, expensesRes, projectsRes] = await Promise.all([
+      supabase.from('investors').select('id, project_id, name, share_percent, amount_invested'),
+      supabase.from('investor_payments').select('investor_id, amount, payment_type'),
+      supabase.from('profit_distributions').select('investor_id, amount'),
+      supabase.from('project_expenses').select('project_id, amount'),
+      supabase.from('my_projects').select('id, name, status'),
+    ])
+
+    if (investorsRes.error) throw investorsRes.error
+
+    const paymentByInv = {}
+    for (const p of (paymentsRes.data ?? [])) {
+      const sign = p.payment_type === 'refund' ? -1 : 1
+      paymentByInv[p.investor_id] = (paymentByInv[p.investor_id] ?? 0) + sign * Number(p.amount || 0)
+    }
+    const profitByInv = {}
+    for (const d of (distributionsRes.data ?? [])) {
+      profitByInv[d.investor_id] = (profitByInv[d.investor_id] ?? 0) + Number(d.amount || 0)
+    }
+    const expenseByProject = {}
+    for (const e of (expensesRes.data ?? [])) {
+      expenseByProject[e.project_id] = (expenseByProject[e.project_id] ?? 0) + Number(e.amount || 0)
+    }
+    const projectMap = {}
+    for (const p of (projectsRes.data ?? [])) projectMap[p.id] = p
+
+    const byName = {}
+    for (const inv of (investorsRes.data ?? [])) {
+      const proj = projectMap[inv.project_id]
+      if (!proj) continue // only show projects the user can see
+      const committed     = Number(inv.amount_invested || 0)
+      const sharePct      = Number(inv.share_percent || 0)
+      const paid          = paymentByInv[inv.id] ?? 0
+      const profit        = profitByInv[inv.id] ?? 0
+      const expense_share = ((expenseByProject[inv.project_id] ?? 0) * sharePct) / 100
+      const outstanding   = committed + expense_share - paid
+      const netGain       = profit - expense_share
+
+      if (!byName[inv.name]) byName[inv.name] = { name: inv.name, projects: [] }
+      byName[inv.name].projects.push({
+        investor_id: inv.id,
+        project_id:  inv.project_id,
+        project_name: proj.name,
+        project_status: proj.status,
+        share_percent: sharePct,
+        committed, paid, profit, expense_share, outstanding, netGain,
+      })
+    }
+
+    return Object.values(byName).map(g => {
+      const totals = g.projects.reduce((a, p) => ({
+        committed:     a.committed     + p.committed,
+        paid:          a.paid          + p.paid,
+        profit:        a.profit        + p.profit,
+        expense_share: a.expense_share + p.expense_share,
+        outstanding:   a.outstanding   + p.outstanding,
+        netGain:       a.netGain       + p.netGain,
+      }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, netGain:0 })
+      return { ...g, totals, projectCount: g.projects.length }
+    }).sort((a, b) => b.totals.committed - a.totals.committed)
+  })
+}
+
 // ── My investments (as investor across all projects) ──────────
 export function useMyInvestments() {
   return useFetch(async () => {
