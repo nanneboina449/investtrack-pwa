@@ -5,7 +5,12 @@ import { acceptPendingInvites } from '../hooks/useSharing'
 import { inr, pct } from '../lib/supabase'
 import { StatCard, Spinner, Empty } from '../components/ui'
 import InviteBanner from '../components/InviteBanner'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
+import {
+  PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend,
+} from 'recharts'
+
+const CHART_PALETTE = ['#1e3a8a', '#0891b2', '#0d9488', '#65a30d', '#ca8a04', '#dc2626', '#9333ea', '#db2777']
 
 export default function Dashboard() {
   const { summary, projects, loading } = useDashboard()
@@ -57,6 +62,11 @@ export default function Dashboard() {
               <StatCard icon="↗"  label="Loans Given"      value={inr(summary.loansGiven)}   color="orange" />
               <StatCard icon="↙"  label="Loans Received"   value={inr(summary.loansReceived)} color="purple" />
             </div>
+
+            {/* Portfolio allocation donut — interactive */}
+            {projects.data.length > 0 && (
+              <PortfolioDonut projects={projects.data} />
+            )}
 
             {/* Investor positions across every project */}
             {investorsSummary.data.length > 0 && (
@@ -127,6 +137,85 @@ export default function Dashboard() {
   )
 }
 
+// ── Portfolio Allocation Donut (interactive) ─────────────────
+function PortfolioDonut({ projects }) {
+  const [hovered, setHovered] = useState(null)
+  const data = useMemo(() => projects
+    .filter(p => p.status !== 'completed')
+    .map((p, i) => ({
+      name:  p.name,
+      value: Math.max(0, (p.total_raised ?? 0) + (p.total_profit ?? 0)),
+      status: p.status,
+      raised: p.total_raised ?? 0,
+      profit: p.total_profit ?? 0,
+    }))
+    .filter(d => d.value > 0)
+    .sort((a, b) => b.value - a.value), [projects])
+
+  if (data.length === 0) return null
+  const totalValue = data.reduce((s, d) => s + d.value, 0)
+  const focused = hovered ?? data[0]
+  const focusedPct = totalValue > 0 ? (focused.value / totalValue) * 100 : 0
+
+  return (
+    <section>
+      <h2 className="font-bold text-gray-900 mb-3">Portfolio Allocation</h2>
+      <div className="card p-4">
+        <div className="flex items-center gap-4">
+          <div className="relative flex-shrink-0" style={{ width: 140, height: 140 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={data}
+                  cx="50%" cy="50%"
+                  innerRadius={45}
+                  outerRadius={68}
+                  paddingAngle={2}
+                  dataKey="value"
+                  onMouseEnter={(_, idx) => setHovered(data[idx])}
+                  onMouseLeave={() => setHovered(null)}
+                >
+                  {data.map((_, i) => <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} stroke="white" strokeWidth={2} />)}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+              <p className="text-[9px] text-gray-400 uppercase tracking-wide">Total</p>
+              <p className="text-sm font-bold mono text-brand-900">{inr(totalValue)}</p>
+            </div>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-gray-900 truncate">{focused.name}</p>
+            <p className="text-[10px] text-gray-400 mb-2">{focused.status} · {focusedPct.toFixed(1)}% of portfolio</p>
+            <div className="space-y-1 text-[11px]">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Raised</span>
+                <span className="font-semibold mono">{inr(focused.raised)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Profit</span>
+                <span className="font-semibold mono text-emerald-600">+{inr(focused.profit)}</span>
+              </div>
+            </div>
+            <p className="text-[10px] text-gray-300 mt-2">{hovered ? 'showing hovered slice' : 'hover or tap a slice'}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-3 pt-3 border-t border-gray-50">
+          {data.map((d, i) => (
+            <button key={d.name} type="button"
+              onMouseEnter={() => setHovered(d)}
+              onMouseLeave={() => setHovered(null)}
+              className="flex items-center gap-1.5 text-[11px] text-left">
+              <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: CHART_PALETTE[i % CHART_PALETTE.length] }} />
+              <span className="text-gray-600 truncate">{d.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 // ── Investor running totals (cross-project) ──────────────────
 function InvestorRunningTotals({ groups }) {
   const totals = groups.reduce((a, g) => ({
@@ -134,7 +223,8 @@ function InvestorRunningTotals({ groups }) {
     paid:        a.paid        + g.totals.paid,
     profit:      a.profit      + g.totals.profit,
     outstanding: a.outstanding + g.totals.outstanding,
-  }), { committed: 0, paid: 0, profit: 0, outstanding: 0 })
+    available:   a.available   + (g.totals.available ?? 0),
+  }), { committed: 0, paid: 0, profit: 0, outstanding: 0, available: 0 })
 
   return (
     <section>
@@ -145,7 +235,7 @@ function InvestorRunningTotals({ groups }) {
 
       {/* Aggregate row */}
       <div className="card p-4 mb-3 bg-brand-50 border-brand-100">
-        <div className="grid grid-cols-4 gap-1 text-center">
+        <div className="grid grid-cols-4 gap-1 text-center mb-3">
           {[
             { l: 'Committed', v: inr(totals.committed),                   c: 'text-brand-900' },
             { l: 'Paid in',    v: inr(totals.paid),                        c: 'text-emerald-700' },
@@ -157,6 +247,15 @@ function InvestorRunningTotals({ groups }) {
               <p className="text-[10px] text-gray-500 mt-0.5">{l}</p>
             </div>
           ))}
+        </div>
+        <div className="flex justify-between items-center pt-3 border-t border-brand-100">
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-brand-500 font-semibold">Available balance</p>
+            <p className="text-[10px] text-brand-400">profit + external cash back − external cash put in</p>
+          </div>
+          <p className={`font-bold mono text-lg ${totals.available >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+            {totals.available >= 0 ? '+' : ''}{inr(totals.available)}
+          </p>
         </div>
       </div>
 
@@ -173,6 +272,15 @@ function InvestorRow({ group }) {
   const owesProject = totals.outstanding > 0.5
   const projectOwes = totals.outstanding < -0.5
   const netPositive = totals.netGain >= 0
+  const available    = totals.available ?? 0
+  const availPositive = available >= 0
+
+  // Bar chart data for the expanded view — one bar per project, two series
+  const chartData = projects.map(p => ({
+    name:   p.project_name.length > 12 ? p.project_name.slice(0, 11) + '…' : p.project_name,
+    Paid:   Math.round(p.paid),
+    Profit: Math.round(p.profit),
+  }))
 
   return (
     <div className="card overflow-hidden">
@@ -211,11 +319,37 @@ function InvestorRow({ group }) {
             <p className="text-[10px] text-gray-400 mt-0.5">Profit</p>
           </div>
         </div>
+        <div className={`flex justify-between items-center mt-3 pt-3 border-t border-gray-50 ${availPositive ? 'text-emerald-700' : 'text-red-600'}`}>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wide">Available</p>
+            <p className="text-[10px] text-gray-400">cash net of internal moves</p>
+          </div>
+          <p className="font-bold mono text-sm">{availPositive ? '+' : ''}{inr(available)}</p>
+        </div>
       </button>
 
       {open && (
-        <div className="px-4 pb-4 pt-1 space-y-2 bg-gray-50 border-t border-gray-100">
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide pt-3">Per project</p>
+        <div className="px-4 pb-4 pt-1 space-y-3 bg-gray-50 border-t border-gray-100">
+          {/* Mini bar chart per project */}
+          {chartData.length > 0 && (
+            <div className="pt-3">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Paid + Profit per project</p>
+              <div style={{ width: '100%', height: 140 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 5 }}>
+                    <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} />
+                    <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickFormatter={v => v >= 100000 ? `${(v/100000).toFixed(1)}L` : v >= 1000 ? `${(v/1000).toFixed(0)}k` : v} />
+                    <Tooltip formatter={(v) => inr(v)} contentStyle={{ fontSize: 11 }} />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                    <Bar dataKey="Paid"   stackId="a" fill="#0d9488" />
+                    <Bar dataKey="Profit" stackId="a" fill="#65a30d" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide pt-1">Per project</p>
           {projects.map(p => {
             const pOwes  = p.outstanding > 0.5
             const pBack  = p.outstanding < -0.5

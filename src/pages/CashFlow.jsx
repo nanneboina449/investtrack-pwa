@@ -400,7 +400,11 @@ function RepaymentSheet({ loan, loanDetail, projects, onClose, onSaved }) {
         )}
         {!isReceived && loanDetail?.contributions?.length > 0 && (
           <div className="mt-2 pt-2 border-t border-amber-200">
-            <p className="text-[10px] text-amber-600 font-semibold mb-1">Will be distributed back to:</p>
+            <p className="text-[10px] text-amber-600 font-semibold mb-1">
+              {repType === 'project_adjustment' && toProject
+                ? 'Will credit these contributors on the destination project:'
+                : 'Will be distributed back to:'}
+            </p>
             {loanDetail.contributions.map((c, i) => {
               const share  = loanDetail.contributions.reduce((s,x)=>s+x.amount,0)
               const back   = share > 0 ? Math.round(repaidNow * c.amount / share) : 0
@@ -414,6 +418,11 @@ function RepaymentSheet({ loan, loanDetail, projects, onClose, onSaved }) {
                 </div>
               )
             })}
+            {repType === 'project_adjustment' && toProject && (
+              <p className="text-[10px] text-amber-600 mt-2 italic">
+                A top-up payment is auto-created per contributor on the destination project (matched by name). Contributors who aren&apos;t investors there are skipped — add them first if needed.
+              </p>
+            )}
           </div>
         )}
         {isReceived && (
