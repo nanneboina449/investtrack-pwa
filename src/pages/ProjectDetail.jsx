@@ -206,10 +206,15 @@ export default function ProjectDetail() {
                   : (inv.total_profit_allocated ?? 0)
                 const committed   = inv.amount_invested ?? 0
                 const expShare    = inv.total_expenses_allocated ?? 0
-                const outstanding = committed + expShare - paid
-                const owesProject = outstanding > 0.5
-                const projectOwes = outstanding < -0.5
-                const roi         = committed > 0 ? (profit / committed) * 100 : 0
+                // Clamp paid at 0 for the Owes calc — negative paid means the
+                // investor lent money to someone else or pulled it out, which
+                // is tracked under "Loaned out" separately, NOT added to Owes.
+                const paidForOwes  = Math.max(paid, 0)
+                const loanedOut    = paid < 0 ? -paid : 0
+                const outstanding  = committed + expShare - paidForOwes
+                const owesProject  = outstanding > 0.5
+                const projectOwes  = outstanding < -0.5
+                const roi          = committed > 0 ? (profit / committed) * 100 : 0
                 return (
                   <div key={inv.investor_id} className="card p-4">
                     <div className="flex justify-between items-start mb-3">
@@ -263,11 +268,16 @@ export default function ProjectDetail() {
                         <p className="text-[10px] text-gray-400 mt-0.5">Profit</p>
                       </div>
                     </div>
-                    {(expShare > 0 || profit > 0) && (
+                    {(expShare > 0 || profit > 0 || loanedOut > 0) && (
                       <div className="mt-2 pt-2 border-t border-gray-50 space-y-1">
+                        {loanedOut > 0 && (
+                          <p className="text-[10px] text-blue-700 font-medium">
+                            Loaned out: −{inr(loanedOut)} (extracted to fund another investor — receivable, not project debt)
+                          </p>
+                        )}
                         {expShare > 0 && (
                           <p className="text-[10px] text-gray-400">
-                            Owes = committed {inr(committed)} + expense share {inr(expShare)} − paid {inr(paid)}
+                            Owes = committed {inr(committed)} + expense share {inr(expShare)} − paid {inr(Math.max(paid, 0))}
                           </p>
                         )}
                         {profit > 0 && committed > 0 && (
