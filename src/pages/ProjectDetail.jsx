@@ -3,8 +3,10 @@ import { useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   useInvestors, useInvestorBalances, useProfitRecords, useExpenses, useInvestorPayments, useProfitDistributions, useProjects,
-  createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord,
-  createExpense, deleteExpense, createPayment, deletePayment,
+  createInvestor, deleteInvestor, updateInvestor,
+  createProfitRecord, deleteProfitRecord, updateProfitRecord,
+  createExpense, deleteExpense, updateExpense,
+  createPayment, deletePayment, updatePayment, updateMove,
   reallocateInvestorPosition,
   updateProject, deleteProject
 } from '../hooks/useData'
@@ -35,7 +37,12 @@ export default function ProjectDetail() {
     return m
   }, [allProjects.data])
 
-  const [moveFromInv, setMoveFromInv] = useState(null)
+  const [moveFromInv, setMoveFromInv]   = useState(null)
+  const [editInvestor, setEditInvestor] = useState(null)
+  const [editProfit, setEditProfit]     = useState(null)
+  const [editExpense, setEditExpense]   = useState(null)
+  const [editPayment, setEditPayment]   = useState(null)
+  const [editMove,    setEditMove]      = useState(null)
 
   const [showAddInv, setShowAddInv]         = useState(false)
   const [showAddProfit, setShowAddProfit]   = useState(false)
@@ -209,6 +216,12 @@ export default function ProjectDetail() {
                       </div>
                       <div className="flex items-center gap-2">
                         {canEdit && (
+                          <button onClick={() => setEditInvestor(inv)}
+                            className="text-[10px] font-semibold px-2 py-1 rounded-lg bg-gray-100 text-gray-700">
+                            ✎ Edit
+                          </button>
+                        )}
+                        {canEdit && (
                           <button onClick={() => setMoveFromInv(inv)}
                             className="text-[10px] font-semibold px-2 py-1 rounded-lg bg-blue-50 text-blue-700">
                             ⇄ Move
@@ -332,6 +345,17 @@ export default function ProjectDetail() {
                               <span className={`font-bold mono ${p.payment_type === 'refund' ? 'text-red-500' : 'text-emerald-600'}`}>
                                 {p.payment_type === 'refund' ? '-' : '+'}{inr(p.amount)}
                               </span>
+                              {canEdit && (
+                                <button
+                                  onClick={() => {
+                                    // If this is part of a linked move (refund with destination), open the move editor
+                                    if (p.payment_type === 'refund' && p.destination_project_id) setEditMove(p)
+                                    else setEditPayment(p)
+                                  }}
+                                  className="text-gray-400 hover:text-gray-600 text-xs">
+                                  ✎
+                                </button>
+                              )}
                               {isOwner && (
                                 <button onClick={() => handleDeletePayment(p.id)} className="text-gray-300 hover:text-red-400 text-base leading-none">×</button>
                               )}
@@ -380,7 +404,10 @@ export default function ProjectDetail() {
                       </div>
                       <div className="text-right">
                         <p className="text-xs text-gray-400">{new Date(rec.record_date).toLocaleDateString('en-IN')}</p>
-                        {isOwner && <button onClick={() => handleDeleteProfit(rec.id)} className="text-xs text-red-400 mt-1">delete</button>}
+                        <div className="flex gap-2 mt-1 justify-end">
+                          {canEdit && <button onClick={() => setEditProfit(rec)} className="text-xs text-gray-500">edit</button>}
+                          {isOwner && <button onClick={() => handleDeleteProfit(rec.id)} className="text-xs text-red-400">delete</button>}
+                        </div>
                       </div>
                     </div>
                     <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
@@ -443,7 +470,10 @@ export default function ProjectDetail() {
                     <div className="text-right">
                       <span className="badge bg-red-50 text-red-700">{exp.category}</span>
                       <p className="text-xs text-gray-400 mt-1">{new Date(exp.expense_date).toLocaleDateString('en-IN')}</p>
-                      {isOwner && <button onClick={() => handleDeleteExpense(exp.id)} className="text-xs text-red-400 mt-1 block">delete</button>}
+                      <div className="flex gap-2 mt-1 justify-end">
+                        {canEdit && <button onClick={() => setEditExpense(exp)} className="text-xs text-gray-500">edit</button>}
+                        {isOwner && <button onClick={() => handleDeleteExpense(exp.id)} className="text-xs text-red-400">delete</button>}
+                      </div>
                     </div>
                   </div>
                   {exp.notes && <p className="text-xs text-gray-400 mb-2">{exp.notes}</p>}
@@ -564,6 +594,33 @@ export default function ProjectDetail() {
             show('Position moved successfully')
           }}
         />
+      )}
+
+      {/* Edit sheets */}
+      {canEdit && editInvestor && (
+        <EditInvestorSheet investor={editInvestor}
+          onClose={() => setEditInvestor(null)}
+          onSaved={() => { setEditInvestor(null); investors.reload(); balances.reload(); payments.reload(); show('Investor updated') }} />
+      )}
+      {canEdit && editProfit && (
+        <EditProfitSheet record={editProfit}
+          onClose={() => setEditProfit(null)}
+          onSaved={() => { setEditProfit(null); profits.reload(); investors.reload(); distributions.reload(); balances.reload(); show('Profit updated') }} />
+      )}
+      {canEdit && editExpense && (
+        <EditExpenseSheet expense={editExpense} investors={investors.data}
+          onClose={() => setEditExpense(null)}
+          onSaved={() => { setEditExpense(null); expenses.reload(); investors.reload(); payments.reload(); balances.reload(); show('Expense updated') }} />
+      )}
+      {canEdit && editPayment && (
+        <EditPaymentSheet payment={editPayment}
+          onClose={() => setEditPayment(null)}
+          onSaved={() => { setEditPayment(null); payments.reload(); investors.reload(); balances.reload(); show('Payment updated') }} />
+      )}
+      {canEdit && editMove && (
+        <EditMoveSheet refund={editMove} projectNameById={projectNameById}
+          onClose={() => setEditMove(null)}
+          onSaved={() => { setEditMove(null); payments.reload(); investors.reload(); balances.reload(); show('Move updated') }} />
       )}
 
       {/* Edit Project Sheet */}
@@ -1191,6 +1248,284 @@ function MoveInvestorPositionSheet({ investor, projects = [], currentProjectId, 
             <p className="text-[10px] text-gray-400 pt-1 border-t border-gray-200">Both rows are linked so the move is traceable from either side.</p>
           </div>
         )}
+      </div>
+    </Sheet>
+  )
+}
+
+// ── Edit Investor Sheet ───────────────────────────────────────
+function EditInvestorSheet({ investor, onClose, onSaved }) {
+  const [form, setForm]   = useState({
+    name:            investor.investor_name ?? '',
+    share_percent:   investor.share_percent ?? '',
+    amount_invested: investor.amount_invested ?? '',
+    notes:           investor.notes ?? '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const submit = async () => {
+    setSaving(true); setError(null)
+    try {
+      await updateInvestor(investor.investor_id, {
+        name:            form.name,
+        share_percent:   parseFloat(form.share_percent),
+        amount_invested: parseFloat(form.amount_invested),
+        notes:           form.notes || null,
+      })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={true} onClose={onClose} title="Edit Investor"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button>
+        </div>
+      }>
+      <div className="space-y-4">
+        <Field label="Full Name *">
+          <input className="input" value={form.name} onChange={e => set('name', e.target.value)} />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Share % *">
+            <input className="input" type="number" step="0.01" value={form.share_percent} onChange={e => set('share_percent', e.target.value)} />
+          </Field>
+          <Field label="Committed Amount (₹) *">
+            <input className="input" type="number" value={form.amount_invested} onChange={e => set('amount_invested', e.target.value)} />
+          </Field>
+        </div>
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)} />
+        </Field>
+        <p className="text-[10px] text-gray-400">Editing commitment doesn&apos;t change the payment ledger. Add or refund payments separately via + Payment.</p>
+      </div>
+    </Sheet>
+  )
+}
+
+// ── Edit Profit Sheet ─────────────────────────────────────────
+function EditProfitSheet({ record, onClose, onSaved }) {
+  const [form, setForm]   = useState({
+    amount:      record.amount ?? '',
+    record_date: record.record_date ?? isoDate(),
+    notes:       record.notes ?? '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const submit = async () => {
+    setSaving(true); setError(null)
+    try {
+      await updateProfitRecord(record.id, {
+        amount:      parseFloat(form.amount),
+        record_date: form.record_date,
+        notes:       form.notes || null,
+      })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={true} onClose={onClose} title="Edit Profit Record"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button>
+        </div>
+      }>
+      <div className="space-y-4">
+        <Field label="Profit Amount (₹) *">
+          <input className="input" type="number" value={form.amount} onChange={e => set('amount', e.target.value)} />
+          <p className="text-[10px] text-gray-400 mt-1">If amount changes, existing per-investor distributions scale proportionally.</p>
+        </Field>
+        <Field label="Date">
+          <input className="input" type="date" value={form.record_date} onChange={e => set('record_date', e.target.value)} />
+        </Field>
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)} />
+        </Field>
+      </div>
+    </Sheet>
+  )
+}
+
+// ── Edit Expense Sheet ────────────────────────────────────────
+function EditExpenseSheet({ expense, investors = [], onClose, onSaved }) {
+  const [form, setForm]   = useState({
+    amount:              expense.amount ?? '',
+    category:            expense.category ?? 'other',
+    description:         expense.description ?? '',
+    expense_date:        expense.expense_date ?? isoDate(),
+    notes:               expense.notes ?? '',
+    paid_by_investor_id: expense.paid_by_investor_id ?? '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const CATEGORIES = [
+    { value: 'registration', label: '📋 Registration' },
+    { value: 'travel',       label: '✈️ Travel' },
+    { value: 'legal',        label: '⚖️ Legal' },
+    { value: 'maintenance',  label: '🔧 Maintenance' },
+    { value: 'tax',          label: '🏛️ Tax' },
+    { value: 'construction', label: '🏗️ Construction' },
+    { value: 'other',        label: '🧾 Other' },
+  ]
+
+  const submit = async () => {
+    setSaving(true); setError(null)
+    try {
+      await updateExpense(expense.id, {
+        amount:              parseFloat(form.amount),
+        category:            form.category,
+        description:         form.description,
+        expense_date:        form.expense_date,
+        notes:               form.notes || null,
+        paid_by_investor_id: form.paid_by_investor_id || null,
+      })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={true} onClose={onClose} title="Edit Expense"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving} style={{ background: '#dc2626' }}>{saving ? 'Saving…' : 'Save Changes'}</button>
+        </div>
+      }>
+      <div className="space-y-4">
+        <Field label="Category">
+          <select className="input" value={form.category} onChange={e => set('category', e.target.value)}>
+            {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Description *">
+          <input className="input" value={form.description} onChange={e => set('description', e.target.value)} />
+        </Field>
+        <Field label="Amount (₹) *">
+          <input className="input" type="number" value={form.amount} onChange={e => set('amount', e.target.value)} />
+        </Field>
+        <Field label="Date">
+          <input className="input" type="date" value={form.expense_date} onChange={e => set('expense_date', e.target.value)} />
+        </Field>
+        <Field label="Paid by">
+          <select className="input" value={form.paid_by_investor_id} onChange={e => set('paid_by_investor_id', e.target.value)}>
+            <option value="">Project funds</option>
+            {investors.map(inv => <option key={inv.investor_id} value={inv.investor_id}>{inv.investor_name} ({inv.share_percent}%)</option>)}
+          </select>
+          <p className="text-[10px] text-gray-400 mt-1">Changes here update the linked investor_payment too.</p>
+        </Field>
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)} />
+        </Field>
+      </div>
+    </Sheet>
+  )
+}
+
+// ── Edit Payment Sheet ────────────────────────────────────────
+function EditPaymentSheet({ payment, onClose, onSaved }) {
+  const [form, setForm]   = useState({
+    amount:       payment.amount ?? '',
+    payment_date: payment.payment_date ?? isoDate(),
+    notes:        payment.notes ?? '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const submit = async () => {
+    setSaving(true); setError(null)
+    try {
+      await updatePayment(payment.id, {
+        amount:       parseFloat(form.amount),
+        payment_date: form.payment_date,
+        notes:        form.notes || null,
+      })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={true} onClose={onClose} title={`Edit ${PAYMENT_TYPE_LABEL[payment.payment_type] || 'Payment'}`}
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button>
+        </div>
+      }>
+      <div className="space-y-4">
+        <p className="text-xs text-gray-400">Payment type is fixed at <strong>{payment.payment_type}</strong>. To change the type, delete and re-create.</p>
+        <Field label="Amount (₹) *">
+          <input className="input" type="number" value={form.amount} onChange={e => set('amount', e.target.value)} />
+        </Field>
+        <Field label="Date">
+          <input className="input" type="date" value={form.payment_date} onChange={e => set('payment_date', e.target.value)} />
+        </Field>
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)} />
+        </Field>
+      </div>
+    </Sheet>
+  )
+}
+
+// ── Edit Move Sheet (paired refund + top_up) ──────────────────
+function EditMoveSheet({ refund, projectNameById, onClose, onSaved }) {
+  const [form, setForm]   = useState({
+    amount:       refund.amount ?? '',
+    payment_date: refund.payment_date ?? isoDate(),
+    notes:        refund.notes ?? '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const destName = projectNameById?.[refund.destination_project_id] ?? '?'
+
+  const submit = async () => {
+    setSaving(true); setError(null)
+    try {
+      await updateMove({
+        refundId: refund.id,
+        amount:   parseFloat(form.amount),
+        date:     form.payment_date,
+        notes:    form.notes || null,
+      })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={true} onClose={onClose} title="Edit Move"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button>
+        </div>
+      }>
+      <div className="space-y-4">
+        <div className="bg-amber-50 rounded-xl p-3 text-xs text-amber-800">
+          <p className="font-semibold">Linked move</p>
+          <p>This edits both the refund here and the top-up on <strong>{destName}</strong> together.</p>
+        </div>
+        <Field label="Amount (₹) *">
+          <input className="input" type="number" value={form.amount} onChange={e => set('amount', e.target.value)} />
+        </Field>
+        <Field label="Date">
+          <input className="input" type="date" value={form.payment_date} onChange={e => set('payment_date', e.target.value)} />
+        </Field>
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)} />
+        </Field>
       </div>
     </Sheet>
   )
