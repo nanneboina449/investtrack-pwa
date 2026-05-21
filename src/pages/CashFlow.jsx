@@ -276,9 +276,19 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
           </div>
         </div>
 
-        <Field label={isLoan ? "Borrower Name" : "Description *"}>
-          <input className="input" placeholder={isLoan ? "Person's name" : "Description"} value={form.counterparty || form.description}
-            onChange={e => isLoan ? (set('counterparty', e.target.value), set('description', `Loan to ${e.target.value}`)) : set('description', e.target.value)} required />
+        <Field label={
+          type === 'loan_given'    ? 'Borrower Name'
+          : type === 'loan_received' ? 'Lender Name'
+          : 'Description *'
+        }>
+          <input className="input"
+            placeholder={isAnyLoan ? "Person or organization's name" : 'Description'}
+            value={isAnyLoan ? form.counterparty : form.description}
+            onChange={e => {
+              if (type === 'loan_given')    { set('counterparty', e.target.value); set('description', `Loan to ${e.target.value}`) }
+              else if (type === 'loan_received') { set('counterparty', e.target.value); set('description', `Loan from ${e.target.value}`) }
+              else                          { set('description', e.target.value) }
+            }} required />
         </Field>
 
         <Field label="Amount (₹) *">
@@ -359,6 +369,8 @@ function RepaymentSheet({ loan, loanDetail, projects, onClose, onSaved }) {
   // Pro-rata split of this repayment into principal vs interest
   const principalPart = totalDue > 0 ? repaidNow * loan.amount / totalDue : repaidNow
   const interestPart  = repaidNow - principalPart
+  const isReceived    = loan.type === 'loan_received'
+  const headerVerb    = isReceived ? 'Loan from' : 'Loan to'
 
   const submit = async (e) => {
     e.preventDefault()
@@ -370,9 +382,9 @@ function RepaymentSheet({ loan, loanDetail, projects, onClose, onSaved }) {
   }
 
   return (
-    <Sheet open={true} onClose={onClose} title="Record Repayment">
+    <Sheet open={true} onClose={onClose} title={isReceived ? 'Record Payment to Lender' : 'Record Repayment'}>
       <div className="bg-amber-50 rounded-xl p-3 mb-4">
-        <p className="text-xs text-amber-700 font-semibold">Loan to {loan.counterparty || loan.description}</p>
+        <p className="text-xs text-amber-700 font-semibold">{headerVerb} {loan.counterparty || loan.description}</p>
         <div className="flex justify-between mt-1">
           <p className="text-sm text-amber-900 font-bold mono">
             {inr(loan.amount)}
@@ -383,10 +395,10 @@ function RepaymentSheet({ loan, loanDetail, projects, onClose, onSaved }) {
         {loanDetail && <ProgressBar value={loanDetail.total_repaid ?? 0} max={totalDue} color="bg-amber-400" height="h-1.5" />}
         {repaidNow > 0 && interestRate > 0 && (
           <p className="text-[10px] text-amber-600 mt-2">
-            This repayment covers ≈ {inr(principalPart)} principal + {inr(interestPart)} interest
+            This {isReceived ? 'payment' : 'repayment'} covers ≈ {inr(principalPart)} principal + {inr(interestPart)} interest
           </p>
         )}
-        {loanDetail?.contributions?.length > 0 && (
+        {!isReceived && loanDetail?.contributions?.length > 0 && (
           <div className="mt-2 pt-2 border-t border-amber-200">
             <p className="text-[10px] text-amber-600 font-semibold mb-1">Will be distributed back to:</p>
             {loanDetail.contributions.map((c, i) => {
@@ -404,13 +416,26 @@ function RepaymentSheet({ loan, loanDetail, projects, onClose, onSaved }) {
             })}
           </div>
         )}
+        {isReceived && (
+          <div className="mt-2 pt-2 border-t border-amber-200">
+            <p className="text-[10px] text-amber-600 font-semibold mb-1">Lender receives this from project funds</p>
+            {interestRate > 0 && (
+              <p className="text-[10px] text-amber-700">
+                Over the life of the loan: pay back {inr(loan.amount)} principal + {inr(interestAmt)} interest = {inr(totalDue)} total
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <form onSubmit={submit} className="space-y-4">
         <div>
-          <label className="label">Repayment Type</label>
+          <label className="label">{isReceived ? 'Payment Source' : 'Repayment Type'}</label>
           <div className="grid grid-cols-2 gap-2">
-            {[{v:'cash',l:'Cash Received'},{v:'project_adjustment',l:'Into a Project'}].map(({v,l}) => (
+            {(isReceived
+              ? [{v:'cash',l:'Cash Paid'},{v:'project_adjustment',l:'From a Project'}]
+              : [{v:'cash',l:'Cash Received'},{v:'project_adjustment',l:'Into a Project'}]
+            ).map(({v,l}) => (
               <button key={v} type="button" onClick={() => setRepType(v)}
                 className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition-all
                   ${repType===v ? 'border-brand-900 bg-brand-50 text-brand-900' : 'border-gray-200 text-gray-600'}`}>
