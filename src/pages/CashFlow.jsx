@@ -1,6 +1,6 @@
 // src/pages/CashFlow.jsx
 import { useState } from 'react'
-import { useCashFlow, useLoans, useProjects, useInvestors, createLoan, recordRepayment, markSettled, reallocateInvestorPosition, updateLoan, updateCashAdjustment } from '../hooks/useData'
+import { useCashFlow, useLoans, useProjects, useInvestors, useAllInvestors, createLoan, recordRepayment, markSettled, reallocateInvestorPosition, updateLoan, updateCashAdjustment } from '../hooks/useData'
 import { inr, isoDate } from '../lib/supabase'
 import { Sheet, Field, SegControl, Spinner, Empty, ProgressBar, useToast } from '../components/ui'
 
@@ -217,6 +217,7 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
 
   // Hook must always be called at top level — pass projectId (may be empty string → hook returns [])
   const investors = useInvestors(form.from_project_id || null)
+  const allInvestorsHook = useAllInvestors()
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -346,16 +347,45 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
               </Field>
             )}
             <Field label="To Project *">
-              <select className="input" value={form.to_project_id} onChange={e => set('to_project_id', e.target.value)}>
-                <option value="">Pick destination project</option>
-                {projects.filter(p => p.id !== form.from_project_id).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+              {(() => {
+                const normalize = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+                const fromInv = investors.data.find(i => i.investor_id === form.from_investor_id)
+                const fromKey = normalize(fromInv?.investor_name)
+                const validDests = form.from_investor_id
+                  ? projects.filter(p =>
+                      p.id !== form.from_project_id &&
+                      (allInvestorsHook.data ?? []).some(i =>
+                        i.project_id === p.id && normalize(i.name) === fromKey
+                      ))
+                  : []
+                return (
+                  <>
+                    <select className="input" value={form.to_project_id}
+                      onChange={e => set('to_project_id', e.target.value)}
+                      disabled={!form.from_investor_id || validDests.length === 0}>
+                      <option value="">
+                        {!form.from_investor_id
+                          ? 'Pick the investor first'
+                          : validDests.length === 0
+                          ? `No other project has ${fromInv?.investor_name ?? 'this investor'}`
+                          : 'Pick destination project'}
+                      </option>
+                      {validDests.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                    {form.from_investor_id && validDests.length === 0 && (
+                      <p className="text-[11px] text-amber-700 bg-amber-50 rounded-lg px-2 py-1.5 mt-2">
+                        Only projects where {fromInv?.investor_name} already exists are listed. Add them as an investor on the destination project first.
+                      </p>
+                    )}
+                  </>
+                )
+              })()}
             </Field>
             <Field label="Notes">
               <input className="input" placeholder="e.g. Profit + capital from Project A" value={form.description}
                 onChange={e => set('description', e.target.value)} />
               <p className="text-[10px] text-gray-400 mt-1">
-                Creates a refund on the source project and a top-up on the destination — both linked. Destination must already have a same-named investor.
+                Creates a refund on the source project and a top-up on the destination — both linked.
               </p>
             </Field>
           </>
