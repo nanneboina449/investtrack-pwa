@@ -292,6 +292,47 @@ export async function updateCashAdjustment(id, values) {
   if (error) throw error
 }
 
+export async function deleteCashAdjustment(id) {
+  // Pre-fetch loan metadata so we can clean up the inter-investor linked
+  // investor_payments rows (refund on lender + top_up on borrower) that
+  // were created by transfer_funds_as_loan. cash_adjustments has no FK
+  // to investor_payments, so we match by amount + date + the source/
+  // destination investor ids on the contribution side.
+  const { data: ca } = await supabase
+    .from('cash_adjustments')
+    .select('id, type, amount, adjustment_date, from_project_id, counterparty')
+    .eq('id', id).single()
+
+  if (ca?.type === 'loan_given') {
+    const { data: contribs } = await supabase
+      .from('loan_contributions')
+      .select('investor_id, amount')
+      .eq('loan_id', id)
+
+    for (const c of (contribs ?? [])) {
+      // Best-effort delete of paired inter-investor payment rows:
+      // - refund on the contributor (lender) with matching amount + date
+      // - top_up on the borrower (we don't know their investor_id here
+      //   directly, so match by source_investor_id = lender + amount + date)
+      await supabase.from('investor_payments').delete()
+        .eq('investor_id',      c.investor_id)
+        .eq('payment_type',     'refund')
+        .eq('amount',           c.amount)
+        .eq('payment_date',     ca.adjustment_date)
+        .not('destination_investor_id', 'is', null)
+      await supabase.from('investor_payments').delete()
+        .eq('source_investor_id', c.investor_id)
+        .eq('payment_type',       'top_up')
+        .eq('amount',             c.amount)
+        .eq('payment_date',       ca.adjustment_date)
+    }
+  }
+
+  // Cascade handles loan_contributions and loan_repayments via FK
+  const { error } = await supabase.from('cash_adjustments').delete().eq('id', id)
+  if (error) throw error
+}
+
 // ── Investor Running Balance ───────────────────────────────────
 export function useInvestorBalances(projectId) {
   return useFetch(async () => {
