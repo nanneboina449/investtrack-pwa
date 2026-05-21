@@ -2,8 +2,9 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  useInvestors, useInvestorBalances, useProfitRecords, useExpenses,
-  createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord, createExpense, deleteExpense,
+  useInvestors, useInvestorBalances, useProfitRecords, useExpenses, useInvestorPayments,
+  createInvestor, deleteInvestor, createProfitRecord, deleteProfitRecord,
+  createExpense, deleteExpense, createPayment, deletePayment,
   updateProject, deleteProject
 } from '../hooks/useData'
 import { useMyRole } from '../hooks/useSharing'
@@ -24,10 +25,12 @@ export default function ProjectDetail() {
   const balances  = useInvestorBalances(id)
   const profits   = useProfitRecords(id)
   const expenses  = useExpenses(id)
+  const payments  = useInvestorPayments(id)
 
-  const [showAddInv, setShowAddInv]       = useState(false)
-  const [showAddProfit, setShowAddProfit] = useState(false)
+  const [showAddInv, setShowAddInv]         = useState(false)
+  const [showAddProfit, setShowAddProfit]   = useState(false)
   const [showAddExpense, setShowAddExpense] = useState(false)
+  const [showAddPayment, setShowAddPayment] = useState(false)
 
   // Determine current user's role
   const [project, setProject] = useState(null)
@@ -61,6 +64,12 @@ export default function ProjectDetail() {
   const handleDeleteProfit = async (pid) => {
     if (!confirm('Delete this profit record?')) return
     try { await deleteProfitRecord(pid); profits.reload(); show('Profit record deleted') }
+    catch (e) { show(e.message, 'error') }
+  }
+
+  const handleDeletePayment = async (pid) => {
+    if (!confirm('Delete this payment? This will not delete any linked expense.')) return
+    try { await deletePayment(pid); payments.reload(); investors.reload(); balances.reload(); show('Payment deleted') }
     catch (e) { show(e.message, 'error') }
   }
 
@@ -140,6 +149,7 @@ export default function ProjectDetail() {
       <div className="px-4 mt-4">
         <SegControl value={tab} onChange={setTab} options={[
           { value: 'investors', label: `Investors (${investors.data.length})` },
+          { value: 'payments',  label: `Payments (${payments.data.length})` },
           { value: 'profits',   label: 'Profit History' },
           { value: 'expenses',  label: `Expenses (${expenses.data.length})` },
           { value: 'balances',  label: 'Balances' },
@@ -187,6 +197,77 @@ export default function ProjectDetail() {
                   </div>
                 </div>
               ))
+            )}
+          </>
+        )}
+
+        {/* PAYMENTS TAB */}
+        {tab === 'payments' && (
+          <>
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-sm font-semibold text-gray-700">
+                  Total paid: <span className="text-brand-700 mono">{inr(payments.data.reduce((s, p) => s + (p.payment_type === 'refund' ? -p.amount : p.amount), 0))}</span>
+                </p>
+                <p className="text-xs text-gray-400">Per-investor payment ledger</p>
+              </div>
+              {canEdit && investors.data.length > 0 && (
+                <button onClick={() => setShowAddPayment(true)} className="btn-primary text-xs px-3 py-2">+ Payment</button>
+              )}
+            </div>
+            {payments.loading ? <Spinner /> : investors.data.length === 0 ? (
+              <Empty icon="💳" title="Add investors first" sub="Payments are tied to specific investors" />
+            ) : payments.data.length === 0 ? (
+              <Empty icon="💳" title="No payments recorded"
+                action={canEdit && <button onClick={() => setShowAddPayment(true)} className="btn-primary text-sm px-5 py-2.5">Record First Payment</button>} />
+            ) : (
+              investors.data.map(inv => {
+                const invPayments = payments.data.filter(p => p.investor_id === inv.investor_id)
+                if (invPayments.length === 0) return null
+                const total = invPayments.reduce((s, p) => s + (p.payment_type === 'refund' ? -p.amount : p.amount), 0)
+                return (
+                  <div key={inv.investor_id} className="card p-4">
+                    <div className="flex justify-between items-center mb-3 pb-3 border-b border-gray-50">
+                      <div>
+                        <p className="font-semibold text-gray-900">{inv.investor_name}</p>
+                        <p className="text-xs text-gray-400">{inv.share_percent}% share · {invPayments.length} payment{invPayments.length === 1 ? '' : 's'}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold mono text-brand-700">{inr(total)}</p>
+                        <p className="text-[10px] text-gray-400">total paid in</p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      {invPayments.map(p => (
+                        <div key={p.id} className="flex justify-between items-start text-xs">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${PAYMENT_TYPE_STYLE[p.payment_type]}`}>
+                                {PAYMENT_TYPE_LABEL[p.payment_type]}
+                              </span>
+                              <span className="text-gray-400">{new Date(p.payment_date).toLocaleDateString('en-IN')}</span>
+                            </div>
+                            {p.expense_description && (
+                              <p className="text-gray-600 mt-0.5 truncate">{p.expense_description}</p>
+                            )}
+                            {p.notes && !p.expense_description && (
+                              <p className="text-gray-500 mt-0.5 truncate">{p.notes}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 ml-2 flex-shrink-0">
+                            <span className={`font-bold mono ${p.payment_type === 'refund' ? 'text-red-500' : 'text-emerald-600'}`}>
+                              {p.payment_type === 'refund' ? '-' : '+'}{inr(p.amount)}
+                            </span>
+                            {isOwner && (
+                              <button onClick={() => handleDeletePayment(p.id)} className="text-gray-300 hover:text-red-400 text-base leading-none">×</button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              }).filter(Boolean)
             )}
           </>
         )}
@@ -247,7 +328,11 @@ export default function ProjectDetail() {
               <Empty icon="🧾" title="No expenses yet"
                 action={canEdit && <button onClick={() => setShowAddExpense(true)} className="btn-primary text-sm px-5 py-2.5">Add First Expense</button>} />
             ) : (
-              expenses.data.map(exp => (
+              expenses.data.map(exp => {
+                const paidBy = exp.paid_by_investor_id
+                  ? investors.data.find(i => i.investor_id === exp.paid_by_investor_id)?.investor_name
+                  : null
+                return (
                 <div key={exp.id} className="card p-4">
                   <div className="flex justify-between items-start mb-3">
                     <div className="flex items-center gap-2">
@@ -255,6 +340,12 @@ export default function ProjectDetail() {
                       <div>
                         <p className="font-semibold text-red-600 mono">{inr(exp.amount)}</p>
                         <p className="text-xs text-gray-600 mt-0.5">{exp.description}</p>
+                        {paidBy && (
+                          <p className="text-[10px] text-blue-700 mt-1">
+                            <span className="font-semibold">Paid by {paidBy}</span>
+                            <span className="text-blue-500"> (credited as payment)</span>
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="text-right">
@@ -274,7 +365,8 @@ export default function ProjectDetail() {
                     ))}
                   </div>
                 </div>
-              ))
+                )
+              })
             )}
           </>
         )}
@@ -350,8 +442,15 @@ export default function ProjectDetail() {
       {/* Add Expense Sheet */}
       {canEdit && (
         <AddExpenseSheet open={showAddExpense} onClose={() => setShowAddExpense(false)}
-          projectId={id}
-          onSaved={() => { setShowAddExpense(false); expenses.reload(); investors.reload(); show('Expense recorded!') }} />
+          projectId={id} investors={investors.data}
+          onSaved={() => { setShowAddExpense(false); expenses.reload(); investors.reload(); payments.reload(); balances.reload(); show('Expense recorded!') }} />
+      )}
+
+      {/* Add Payment Sheet */}
+      {canEdit && (
+        <AddPaymentSheet open={showAddPayment} onClose={() => setShowAddPayment(false)}
+          projectId={id} investors={investors.data}
+          onSaved={() => { setShowAddPayment(false); payments.reload(); investors.reload(); balances.reload(); show('Payment recorded!') }} />
       )}
 
       {/* Edit Project Sheet */}
@@ -520,6 +619,20 @@ function AddProfitSheet({ open, onClose, projectId, onSaved }) {
   )
 }
 
+// ── Payment type styling ──────────────────────────────────────
+const PAYMENT_TYPE_LABEL = {
+  share_contribution: 'share',
+  expense_paid:       'expense',
+  top_up:             'top-up',
+  refund:             'refund',
+}
+const PAYMENT_TYPE_STYLE = {
+  share_contribution: 'bg-blue-50 text-blue-700',
+  expense_paid:       'bg-red-50 text-red-700',
+  top_up:             'bg-emerald-50 text-emerald-700',
+  refund:             'bg-amber-50 text-amber-700',
+}
+
 // ── Expense category icons ────────────────────────────────────
 const EXPENSE_ICONS = {
   registration:  '📋',
@@ -532,9 +645,10 @@ const EXPENSE_ICONS = {
 }
 
 // ── Add Expense Sheet ─────────────────────────────────────────
-function AddExpenseSheet({ open, onClose, projectId, onSaved }) {
+function AddExpenseSheet({ open, onClose, projectId, investors = [], onSaved }) {
   const [form, setForm] = useState({
-    amount: '', category: 'other', description: '', expense_date: isoDate(), notes: ''
+    amount: '', category: 'other', description: '', expense_date: isoDate(), notes: '',
+    paid_by_investor_id: '',
   })
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState(null)
@@ -555,14 +669,15 @@ function AddExpenseSheet({ open, onClose, projectId, onSaved }) {
     setSaving(true); setError(null)
     try {
       await createExpense({
-        project_id:   projectId,
-        amount:       parseFloat(form.amount),
-        category:     form.category,
-        description:  form.description,
-        expense_date: form.expense_date,
-        notes:        form.notes || null,
+        project_id:          projectId,
+        amount:              parseFloat(form.amount),
+        category:            form.category,
+        description:         form.description,
+        expense_date:        form.expense_date,
+        notes:               form.notes || null,
+        paid_by_investor_id: form.paid_by_investor_id || null,
       })
-      setForm({ amount: '', category: 'other', description: '', expense_date: isoDate(), notes: '' })
+      setForm({ amount: '', category: 'other', description: '', expense_date: isoDate(), notes: '', paid_by_investor_id: '' })
       onSaved()
     } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
@@ -611,12 +726,124 @@ function AddExpenseSheet({ open, onClose, projectId, onSaved }) {
             onChange={e => set('expense_date', e.target.value)} />
         </Field>
 
+        <Field label="Paid by">
+          <select className="input" value={form.paid_by_investor_id}
+            onChange={e => set('paid_by_investor_id', e.target.value)}>
+            <option value="">Project funds (default)</option>
+            {investors.map(inv => (
+              <option key={inv.investor_id} value={inv.investor_id}>
+                {inv.investor_name} ({inv.share_percent}%)
+              </option>
+            ))}
+          </select>
+          {form.paid_by_investor_id && (
+            <p className="text-[10px] text-blue-700 mt-1.5 bg-blue-50 rounded-lg px-2 py-1.5">
+              ✓ Will credit this investor with the full amount, and still split the expense by share %
+            </p>
+          )}
+        </Field>
+
         <Field label="Notes">
           <textarea className="input resize-none" rows={2} placeholder="Optional details…"
             value={form.notes} onChange={e => set('notes', e.target.value)} />
         </Field>
 
       </form>
+    </Sheet>
+  )
+}
+
+// ── Add Payment Sheet ─────────────────────────────────────────
+function AddPaymentSheet({ open, onClose, projectId, investors = [], onSaved }) {
+  const [form, setForm] = useState({
+    investor_id: '', amount: '', payment_type: 'share_contribution',
+    payment_date: isoDate(), notes: '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const TYPES = [
+    { value: 'share_contribution', label: '💼 Share contribution', hint: 'Investor paying their committed share' },
+    { value: 'top_up',             label: '➕ Top-up',              hint: 'Additional capital beyond their share' },
+    { value: 'refund',             label: '↩ Refund to investor',  hint: 'Project paying capital back to investor' },
+  ]
+
+  const submit = async () => {
+    if (!form.investor_id) { setError('Pick an investor'); return }
+    if (!form.amount)      { setError('Amount is required'); return }
+    setSaving(true); setError(null)
+    try {
+      await createPayment({
+        investor_id:  form.investor_id,
+        project_id:   projectId,
+        amount:       parseFloat(form.amount),
+        payment_type: form.payment_type,
+        payment_date: form.payment_date,
+        notes:        form.notes || null,
+      })
+      setForm({ investor_id: '', amount: '', payment_type: 'share_contribution', payment_date: isoDate(), notes: '' })
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Record Payment"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>
+            {saving ? 'Saving…' : 'Record Payment'}
+          </button>
+        </div>
+      }>
+      <div className="space-y-4">
+        <div className="bg-blue-50 rounded-xl px-3 py-2.5 text-xs text-blue-800">
+          For expenses paid by an investor, use the Add Expense form and set "Paid by" — it auto-records the payment too.
+        </div>
+
+        <Field label="Investor *">
+          <select className="input" value={form.investor_id}
+            onChange={e => set('investor_id', e.target.value)} autoFocus>
+            <option value="">Choose investor</option>
+            {investors.map(inv => (
+              <option key={inv.investor_id} value={inv.investor_id}>
+                {inv.investor_name} ({inv.share_percent}%)
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Payment Type">
+          <div className="space-y-2">
+            {TYPES.map(t => (
+              <button key={t.value} type="button" onClick={() => set('payment_type', t.value)}
+                className={`w-full text-left px-3 py-2.5 rounded-xl border text-sm transition-all
+                  ${form.payment_type === t.value
+                    ? 'border-brand-900 bg-brand-50'
+                    : 'border-gray-200'}`}>
+                <p className={`font-semibold ${form.payment_type === t.value ? 'text-brand-900' : 'text-gray-700'}`}>{t.label}</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">{t.hint}</p>
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Amount (₹) *">
+          <input className="input" type="number" placeholder="0" value={form.amount}
+            onChange={e => set('amount', e.target.value)} />
+        </Field>
+
+        <Field label="Date">
+          <input className="input" type="date" value={form.payment_date}
+            onChange={e => set('payment_date', e.target.value)} />
+        </Field>
+
+        <Field label="Notes">
+          <textarea className="input resize-none" rows={2} placeholder="Optional…"
+            value={form.notes} onChange={e => set('notes', e.target.value)} />
+        </Field>
+      </div>
     </Sheet>
   )
 }
