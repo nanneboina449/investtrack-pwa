@@ -270,11 +270,23 @@ export default function ProjectDetail() {
                     </div>
                     {(expShare > 0 || profit > 0 || loanedOut > 0) && (
                       <div className="mt-2 pt-2 border-t border-gray-50 space-y-1">
-                        {loanedOut > 0 && (
-                          <p className="text-[10px] text-blue-700 font-medium">
-                            Loaned out: −{inr(loanedOut)} (extracted to fund another investor — receivable, not project debt)
-                          </p>
-                        )}
+                        {loanedOut > 0 && (() => {
+                          // Distinguish reallocations (refunds with destination_investor_id
+                          // pointing to the SAME person on another project) from loans
+                          // (refunds with destination_investor_id pointing to a DIFFERENT person)
+                          const refunds = invPayments.filter(p => p.payment_type === 'refund' && p.destination_investor_id)
+                          const reallocAmt = refunds
+                            .filter(r => r.destination_investor_id /* will be the same person via name match elsewhere */
+                              && investors.data.some(i => i.investor_id === inv.investor_id))
+                            // crude: classify by checking if there's a matching cash_adjustments loan record
+                            // (we don't have that data here, so just show one combined line)
+                            .reduce((s, r) => s + r.amount, 0)
+                          return (
+                            <p className="text-[10px] text-blue-700 font-medium">
+                              Extracted from this project: −{inr(loanedOut)} (moved or lent out — tracked elsewhere as receivable / position on another project)
+                            </p>
+                          )
+                        })()}
                         {expShare > 0 && (
                           <p className="text-[10px] text-gray-400">
                             Owes = committed {inr(committed)} + expense share {inr(expShare)} − paid {inr(Math.max(paid, 0))}
