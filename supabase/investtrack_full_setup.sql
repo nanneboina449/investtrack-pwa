@@ -142,6 +142,37 @@ create trigger projects_scale_investor_commitments
   for each row execute function scale_investor_commitments_on_project_change();
 
 -- ============================================================
+-- 4c. TRIGGER: keep denormalized investor_name fields in sync
+-- (loan_contributions and repayment_distributions store the
+-- investor's name as text so they survive investor deletion. When
+-- an investor is renamed, fan the new name out to those rows.)
+-- ============================================================
+create or replace function sync_investor_name_to_denormalized()
+returns trigger
+language plpgsql
+as $$
+begin
+  if NEW.name is distinct from OLD.name then
+    update loan_contributions
+      set investor_name = NEW.name
+      where investor_id = NEW.id;
+
+    update repayment_distributions
+      set investor_name = NEW.name
+      where loan_contribution_id in (
+        select id from loan_contributions where investor_id = NEW.id
+      );
+  end if;
+  return NEW;
+end;
+$$;
+
+drop trigger if exists investors_name_sync on investors;
+create trigger investors_name_sync
+  after update of name on investors
+  for each row execute function sync_investor_name_to_denormalized();
+
+-- ============================================================
 -- 5. RLS POLICIES — re-create idempotently
 -- ============================================================
 alter table investor_payments      enable row level security;
