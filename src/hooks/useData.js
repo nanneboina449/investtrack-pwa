@@ -118,10 +118,19 @@ export async function deleteProfitRecord(id) {
 export function useProfitDistributions(projectId) {
   return useFetch(async () => {
     if (!projectId) return []
+    // Two-query fetch (no embedded relation) so we don't depend on
+    // PostgREST inferring the FK on profit_distributions -> profit_records.
+    const { data: pr, error: prErr } = await supabase
+      .from('profit_records')
+      .select('id')
+      .eq('project_id', projectId)
+    if (prErr) throw prErr
+    if (!pr || pr.length === 0) return []
+    const ids = pr.map(p => p.id)
     const { data, error } = await supabase
       .from('profit_distributions')
-      .select('id, profit_id, investor_id, amount, profit_records!inner(project_id)')
-      .eq('profit_records.project_id', projectId)
+      .select('id, profit_id, investor_id, amount')
+      .in('profit_id', ids)
     if (error) throw error
     return data ?? []
   }, [projectId])

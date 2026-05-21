@@ -177,10 +177,12 @@ export default function ProjectDetail() {
                 const paid = invPayments.reduce(
                   (s, p) => s + (p.payment_type === 'refund' ? -p.amount : p.amount), 0
                 )
-                // Sum stored distributions so custom-split profits show correctly
-                // (falls back to view's proportional total if distributions aren't loaded yet)
+                // Profit MUST come from profit_distributions (respects custom splits).
+                // Only fall back to the view if migration hasn't been run AND there
+                // are no distribution rows at all in the project.
                 const invDists = distributions.data.filter(d => d.investor_id === inv.investor_id)
-                const profit   = invDists.length > 0
+                const ledgerActive = distributions.data.length > 0 || profits.data.length === 0
+                const profit = ledgerActive
                   ? invDists.reduce((s, d) => s + Number(d.amount || 0), 0)
                   : (inv.total_profit_allocated ?? 0)
                 const committed   = inv.amount_invested ?? 0
@@ -438,7 +440,13 @@ export default function ProjectDetail() {
               <Empty icon="⚖️" title="No balance data" sub="Add investors first" />
             ) : (
               balances.data.map(b => {
-                const effective = b.amount_invested + b.profit_allocated - b.money_loaned_out + b.money_repaid_received + b.money_moved_to_projects
+                // Resolve profit_allocated from profit_distributions (respects custom splits)
+                const bDists = distributions.data.filter(d => d.investor_id === b.investor_id)
+                const ledgerActive = distributions.data.length > 0 || profits.data.length === 0
+                const profitAllocated = ledgerActive
+                  ? bDists.reduce((s, d) => s + Number(d.amount || 0), 0)
+                  : (b.profit_allocated ?? 0)
+                const effective = b.amount_invested + profitAllocated - b.money_loaned_out + b.money_repaid_received + b.money_moved_to_projects
                 return (
                   <div key={b.investor_id} className="card p-4">
                     <div className="flex justify-between items-center mb-3">
@@ -454,7 +462,7 @@ export default function ProjectDetail() {
                     <div className="space-y-1.5 text-xs border-t border-gray-50 pt-3">
                       {[
                         { l: 'Amount invested',     v: inr(b.amount_invested),              c: 'text-gray-700' },
-                        { l: '+ Profit allocated',  v: `+${inr(b.profit_allocated)}`,        c: 'text-emerald-600' },
+                        { l: '+ Profit allocated',  v: `+${inr(profitAllocated)}`,           c: 'text-emerald-600' },
                         { l: '− Expenses charged',  v: `-${inr(b.total_expenses_allocated ?? 0)}`, c: 'text-red-500' },
                         { l: '− Loaned out',         v: `-${inr(b.money_loaned_out)}`,        c: 'text-red-500' },
                         { l: '+ Repaid received',   v: `+${inr(b.money_repaid_received)}`,   c: 'text-emerald-600' },
