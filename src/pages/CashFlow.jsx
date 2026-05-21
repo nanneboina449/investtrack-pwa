@@ -74,17 +74,24 @@ export default function CashFlow() {
                   <div className="flex justify-between items-start">
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-gray-900 text-sm truncate">{a.counterparty || a.description}</p>
-                      <p className="text-xs text-gray-400">{a.type === 'loan_given' ? 'Loan Given' : 'Loan Received'} · {new Date(a.adjustment_date).toLocaleDateString('en-IN')}</p>
+                      <p className="text-xs text-gray-400">{a.type === 'loan_given' ? 'Loan Given' : 'Loan Received'} · {new Date(a.adjustment_date).toLocaleDateString('en-IN')}
+                        {loanDetail?.interest_rate_percent > 0 && (
+                          <span className="ml-1 text-amber-700 font-semibold">· {loanDetail.interest_rate_percent}% int</span>
+                        )}
+                      </p>
                     </div>
                     <div className="text-right ml-3 flex-shrink-0">
                       <p className="font-bold mono text-sm">{inr(a.amount)}</p>
+                      {loanDetail?.interest_rate_percent > 0 && (
+                        <p className="text-[10px] text-amber-700">+ {inr(loanDetail.interest_amount ?? 0)} int</p>
+                      )}
                       {loanDetail && loanDetail.total_repaid > 0 && (
                         <p className="text-xs text-emerald-600">{inr(loanDetail.total_repaid)} repaid</p>
                       )}
                     </div>
                   </div>
                   {loanDetail && loanDetail.total_repaid > 0 && (
-                    <ProgressBar value={loanDetail.total_repaid} max={loanDetail.total_loan_amount} color="bg-emerald-400" height="h-1.5" />
+                    <ProgressBar value={loanDetail.total_repaid} max={loanDetail.total_due_with_interest ?? loanDetail.total_loan_amount} color="bg-emerald-400" height="h-1.5" />
                   )}
                   <div className="flex gap-2 mt-2">
                     <button onClick={() => setActiveLoan(a)} className="text-xs bg-blue-50 text-blue-700 font-semibold px-3 py-1.5 rounded-lg flex-1">
@@ -189,7 +196,7 @@ export default function CashFlow() {
 // ── Add Transaction Sheet ──────────────────────────────────────
 function AddTransactionSheet({ open, onClose, projects, onSaved }) {
   const [type, setType]   = useState('loan_given')
-  const [form, setForm]   = useState({ description: '', amount: '', counterparty: '', adjustment_date: isoDate(), from_project_id: '', to_project_id: '' })
+  const [form, setForm]   = useState({ description: '', amount: '', counterparty: '', adjustment_date: isoDate(), from_project_id: '', to_project_id: '', interest_rate_percent: '' })
   const [contributions, setContributions] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState(null)
@@ -200,6 +207,11 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const isLoan = type === 'loan_given'
+  const isAnyLoan = type === 'loan_given' || type === 'loan_received'
+  const principal = parseFloat(form.amount) || 0
+  const interestPct = parseFloat(form.interest_rate_percent) || 0
+  const interestAmt = principal * interestPct / 100
+  const totalDue = principal + interestAmt
 
   // Auto-fill contributions proportionally when amount or project changes
   const autoFillContributions = (amount, invs) => {
@@ -225,7 +237,16 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
     if (isLoan && form.from_project_id && !contribMatch) { setError('Contributions must sum to loan amount'); return }
     setSaving(true); setError(null)
     try {
-      const adj = { type, description: form.description, amount: loanAmount, counterparty: form.counterparty || null, adjustment_date: form.adjustment_date, from_project_id: form.from_project_id || null, to_project_id: form.to_project_id || null }
+      const adj = {
+        type,
+        description:           form.description,
+        amount:                loanAmount,
+        counterparty:          form.counterparty || null,
+        adjustment_date:       form.adjustment_date,
+        from_project_id:       form.from_project_id || null,
+        to_project_id:         form.to_project_id || null,
+        interest_rate_percent: isAnyLoan ? interestPct : 0,
+      }
       if (isLoan && contributions.length > 0) {
         await createLoan({ adjustment: adj, contributions })
       } else {
@@ -255,15 +276,38 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
           </div>
         </div>
 
-        <Field label={isLoan ? "Borrower Name" : "Description *"}>
-          <input className="input" placeholder={isLoan ? "Person's name" : "Description"} value={form.counterparty || form.description}
-            onChange={e => isLoan ? (set('counterparty', e.target.value), set('description', `Loan to ${e.target.value}`)) : set('description', e.target.value)} required />
+        <Field label={
+          type === 'loan_given'    ? 'Borrower Name'
+          : type === 'loan_received' ? 'Lender Name'
+          : 'Description *'
+        }>
+          <input className="input"
+            placeholder={isAnyLoan ? "Person or organization's name" : 'Description'}
+            value={isAnyLoan ? form.counterparty : form.description}
+            onChange={e => {
+              if (type === 'loan_given')    { set('counterparty', e.target.value); set('description', `Loan to ${e.target.value}`) }
+              else if (type === 'loan_received') { set('counterparty', e.target.value); set('description', `Loan from ${e.target.value}`) }
+              else                          { set('description', e.target.value) }
+            }} required />
         </Field>
 
         <Field label="Amount (₹) *">
           <input className="input" type="number" placeholder="0" value={form.amount}
             onChange={e => { set('amount', e.target.value); if (isLoan && investors.data.length) autoFillContributions(e.target.value, investors.data) }} required />
         </Field>
+
+        {isAnyLoan && (
+          <Field label="Interest Rate (flat %)">
+            <input className="input" type="number" step="0.01" min="0" max="100" placeholder="0"
+              value={form.interest_rate_percent}
+              onChange={e => set('interest_rate_percent', e.target.value)} />
+            {principal > 0 && interestPct > 0 && (
+              <p className="text-[10px] text-amber-700 bg-amber-50 rounded-lg px-2 py-1.5 mt-1">
+                {type === 'loan_given' ? 'Total due back' : 'Total to repay'}: {inr(totalDue)} ({inr(principal)} principal + {inr(interestAmt)} interest)
+              </p>
+            )}
+          </Field>
+        )}
 
         {isLoan && (
           <Field label="Funding Source Project">
@@ -317,7 +361,16 @@ function RepaymentSheet({ loan, loanDetail, projects, onClose, onSaved }) {
   const [saving, setSaving]   = useState(false)
   const [error, setError]     = useState(null)
 
-  const outstanding = loanDetail?.outstanding_balance ?? loan.amount
+  const outstanding   = loanDetail?.outstanding_balance ?? loan.amount
+  const interestRate  = loanDetail?.interest_rate_percent ?? 0
+  const interestAmt   = loanDetail?.interest_amount ?? 0
+  const totalDue      = loanDetail?.total_due_with_interest ?? loan.amount
+  const repaidNow     = parseFloat(amount) || 0
+  // Pro-rata split of this repayment into principal vs interest
+  const principalPart = totalDue > 0 ? repaidNow * loan.amount / totalDue : repaidNow
+  const interestPart  = repaidNow - principalPart
+  const isReceived    = loan.type === 'loan_received'
+  const headerVerb    = isReceived ? 'Loan from' : 'Loan to'
 
   const submit = async (e) => {
     e.preventDefault()
@@ -329,37 +382,60 @@ function RepaymentSheet({ loan, loanDetail, projects, onClose, onSaved }) {
   }
 
   return (
-    <Sheet open={true} onClose={onClose} title="Record Repayment">
+    <Sheet open={true} onClose={onClose} title={isReceived ? 'Record Payment to Lender' : 'Record Repayment'}>
       <div className="bg-amber-50 rounded-xl p-3 mb-4">
-        <p className="text-xs text-amber-700 font-semibold">Loan to {loan.counterparty || loan.description}</p>
+        <p className="text-xs text-amber-700 font-semibold">{headerVerb} {loan.counterparty || loan.description}</p>
         <div className="flex justify-between mt-1">
-          <p className="text-sm text-amber-900 font-bold mono">{inr(loan.amount)} total</p>
+          <p className="text-sm text-amber-900 font-bold mono">
+            {inr(loan.amount)}
+            {interestRate > 0 && <span className="text-amber-700 font-normal text-xs"> + {inr(interestAmt)} int = {inr(totalDue)}</span>}
+          </p>
           <p className="text-sm text-amber-700 mono">Outstanding: {inr(outstanding)}</p>
         </div>
-        {loanDetail && <ProgressBar value={loanDetail.total_repaid ?? 0} max={loan.amount} color="bg-amber-400" height="h-1.5" />}
-        {loanDetail?.contributions?.length > 0 && (
+        {loanDetail && <ProgressBar value={loanDetail.total_repaid ?? 0} max={totalDue} color="bg-amber-400" height="h-1.5" />}
+        {repaidNow > 0 && interestRate > 0 && (
+          <p className="text-[10px] text-amber-600 mt-2">
+            This {isReceived ? 'payment' : 'repayment'} covers ≈ {inr(principalPart)} principal + {inr(interestPart)} interest
+          </p>
+        )}
+        {!isReceived && loanDetail?.contributions?.length > 0 && (
           <div className="mt-2 pt-2 border-t border-amber-200">
             <p className="text-[10px] text-amber-600 font-semibold mb-1">Will be distributed back to:</p>
             {loanDetail.contributions.map((c, i) => {
-              const repaid = parseFloat(amount) || 0
               const share  = loanDetail.contributions.reduce((s,x)=>s+x.amount,0)
-              const back   = share > 0 ? Math.round(repaid * c.amount / share) : 0
+              const back   = share > 0 ? Math.round(repaidNow * c.amount / share) : 0
+              const finalReturn = share > 0 ? Math.round(c.amount * (1 + interestRate / 100)) : c.amount
               return (
                 <div key={i} className="flex justify-between text-xs text-amber-700">
-                  <span>{c.investor_name} ({inr(c.amount)})</span>
+                  <span>
+                    {c.investor_name} (contrib {inr(c.amount)}{interestRate > 0 ? ` → expects ${inr(finalReturn)}` : ''})
+                  </span>
                   <span className="font-semibold mono">{back > 0 ? `+${inr(back)}` : '—'}</span>
                 </div>
               )
             })}
           </div>
         )}
+        {isReceived && (
+          <div className="mt-2 pt-2 border-t border-amber-200">
+            <p className="text-[10px] text-amber-600 font-semibold mb-1">Lender receives this from project funds</p>
+            {interestRate > 0 && (
+              <p className="text-[10px] text-amber-700">
+                Over the life of the loan: pay back {inr(loan.amount)} principal + {inr(interestAmt)} interest = {inr(totalDue)} total
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <form onSubmit={submit} className="space-y-4">
         <div>
-          <label className="label">Repayment Type</label>
+          <label className="label">{isReceived ? 'Payment Source' : 'Repayment Type'}</label>
           <div className="grid grid-cols-2 gap-2">
-            {[{v:'cash',l:'Cash Received'},{v:'project_adjustment',l:'Into a Project'}].map(({v,l}) => (
+            {(isReceived
+              ? [{v:'cash',l:'Cash Paid'},{v:'project_adjustment',l:'From a Project'}]
+              : [{v:'cash',l:'Cash Received'},{v:'project_adjustment',l:'Into a Project'}]
+            ).map(({v,l}) => (
               <button key={v} type="button" onClick={() => setRepType(v)}
                 className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition-all
                   ${repType===v ? 'border-brand-900 bg-brand-50 text-brand-900' : 'border-gray-200 text-gray-600'}`}>
