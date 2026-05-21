@@ -28,12 +28,47 @@ function useFetch(fetcher, deps = []) {
 // ── Projects ─────────────────────────────────────────────────
 export function useProjects() {
   return useFetch(async () => {
-    const { data, error } = await supabase
+    const { data: projects, error } = await supabase
       .from('my_projects')
       .select('*')
       .order('created_at', { ascending: false })
     if (error) throw error
-    return data
+    if (!projects || projects.length === 0) return []
+
+    // The my_projects view multiplies total_profit by num_investors and
+    // total_raised by num_profit_records due to a Cartesian LEFT JOIN.
+    // Until the view migration is applied (and even after, as a safety
+    // net), recompute these totals client-side from the source tables.
+    const ids = projects.map(p => p.id)
+    const [profitsRes, invsRes, expensesRes] = await Promise.all([
+      supabase.from('profit_records').select('project_id, amount').in('project_id', ids),
+      supabase.from('investors').select('project_id, amount_invested').in('project_id', ids),
+      supabase.from('project_expenses').select('project_id, amount').in('project_id', ids),
+    ])
+
+    const sumBy = (rows, col = 'amount') => {
+      const m = {}
+      for (const r of (rows ?? [])) {
+        m[r.project_id] = (m[r.project_id] ?? 0) + Number(r[col] || 0)
+      }
+      return m
+    }
+    const profitMap   = sumBy(profitsRes.data)
+    const raisedMap   = sumBy(invsRes.data, 'amount_invested')
+    const expensesMap = sumBy(expensesRes.data)
+
+    return projects.map(p => {
+      const profit   = profitMap[p.id]   ?? 0
+      const raised   = raisedMap[p.id]   ?? 0
+      const expenses = expensesMap[p.id] ?? 0
+      return {
+        ...p,
+        total_profit:   profit,
+        total_raised:   raised,
+        total_expenses: expenses,
+        net_profit:     profit - expenses,
+      }
+    })
   })
 }
 
