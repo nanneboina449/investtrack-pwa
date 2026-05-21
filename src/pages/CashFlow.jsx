@@ -1,6 +1,6 @@
 // src/pages/CashFlow.jsx
 import { useState } from 'react'
-import { useCashFlow, useLoans, useProjects, useInvestors, createLoan, recordRepayment, markSettled } from '../hooks/useData'
+import { useCashFlow, useLoans, useProjects, useInvestors, createLoan, recordRepayment, markSettled, reallocateInvestorPosition } from '../hooks/useData'
 import { inr, isoDate } from '../lib/supabase'
 import { Sheet, Field, SegControl, Spinner, Empty, ProgressBar, useToast } from '../components/ui'
 
@@ -196,7 +196,7 @@ export default function CashFlow() {
 // ── Add Transaction Sheet ──────────────────────────────────────
 function AddTransactionSheet({ open, onClose, projects, onSaved }) {
   const [type, setType]   = useState('loan_given')
-  const [form, setForm]   = useState({ description: '', amount: '', counterparty: '', adjustment_date: isoDate(), from_project_id: '', to_project_id: '', interest_rate_percent: '' })
+  const [form, setForm]   = useState({ description: '', amount: '', counterparty: '', adjustment_date: isoDate(), from_project_id: '', to_project_id: '', interest_rate_percent: '', from_investor_id: '' })
   const [contributions, setContributions] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState(null)
@@ -208,6 +208,7 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
 
   const isLoan = type === 'loan_given'
   const isAnyLoan = type === 'loan_given' || type === 'loan_received'
+  const isReallocation = type === 'reallocation'
   const principal = parseFloat(form.amount) || 0
   const interestPct = parseFloat(form.interest_rate_percent) || 0
   const interestAmt = principal * interestPct / 100
@@ -235,25 +236,59 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
   const submit = async (e) => {
     e.preventDefault()
     if (isLoan && form.from_project_id && !contribMatch) { setError('Contributions must sum to loan amount'); return }
+    if (isReallocation) {
+      if (!form.from_investor_id) { setError('Pick the investor whose money is being reallocated'); return }
+      if (!form.to_project_id)    { setError('Pick the destination project'); return }
+      if (loanAmount <= 0)        { setError('Amount must be positive'); return }
+    }
     setSaving(true); setError(null)
     try {
-      const adj = {
-        type,
-        description:           form.description,
-        amount:                loanAmount,
-        counterparty:          form.counterparty || null,
-        adjustment_date:       form.adjustment_date,
-        from_project_id:       form.from_project_id || null,
-        to_project_id:         form.to_project_id || null,
-        interest_rate_percent: isAnyLoan ? interestPct : 0,
-      }
-      if (isLoan && contributions.length > 0) {
-        await createLoan({ adjustment: adj, contributions })
-      } else {
+      if (isReallocation) {
+        // Run the atomic linked refund + top-up; also drop a marker row
+        // on cash_adjustments so the reallocation appears in the timeline.
+        await reallocateInvestorPosition({
+          sourceInvestorId: form.from_investor_id,
+          destProjectId:    form.to_project_id,
+          amount:           loanAmount,
+          date:             form.adjustment_date,
+          notes:            form.description || null,
+        })
         const { supabase } = await import('../lib/supabase')
         const { data: { user } } = await supabase.auth.getUser()
-        const { error } = await supabase.from('cash_adjustments').insert({ ...adj, user_id: user.id })
+        const invName = investors.data.find(i => i.investor_id === form.from_investor_id)?.investor_name
+        const destName = projects.find(p => p.id === form.to_project_id)?.name
+        const srcName  = projects.find(p => p.id === form.from_project_id)?.name
+        const auto = `Reallocation: ${invName ?? 'Investor'} · ${srcName ?? 'source'} → ${destName ?? 'destination'}`
+        const { error } = await supabase.from('cash_adjustments').insert({
+          user_id:         user.id,
+          type:            'reallocation',
+          description:     form.description || auto,
+          amount:          loanAmount,
+          counterparty:    invName ?? null,
+          adjustment_date: form.adjustment_date,
+          from_project_id: form.from_project_id || null,
+          to_project_id:   form.to_project_id  || null,
+        })
         if (error) throw error
+      } else {
+        const adj = {
+          type,
+          description:           form.description,
+          amount:                loanAmount,
+          counterparty:          form.counterparty || null,
+          adjustment_date:       form.adjustment_date,
+          from_project_id:       form.from_project_id || null,
+          to_project_id:         form.to_project_id || null,
+          interest_rate_percent: isAnyLoan ? interestPct : 0,
+        }
+        if (isLoan && contributions.length > 0) {
+          await createLoan({ adjustment: adj, contributions })
+        } else {
+          const { supabase } = await import('../lib/supabase')
+          const { data: { user } } = await supabase.auth.getUser()
+          const { error } = await supabase.from('cash_adjustments').insert({ ...adj, user_id: user.id })
+          if (error) throw error
+        }
       }
       onSaved()
     } catch (e) { setError(e.message) } finally { setSaving(false) }
@@ -276,20 +311,56 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
           </div>
         </div>
 
-        <Field label={
-          type === 'loan_given'    ? 'Borrower Name'
-          : type === 'loan_received' ? 'Lender Name'
-          : 'Description *'
-        }>
-          <input className="input"
-            placeholder={isAnyLoan ? "Person or organization's name" : 'Description'}
-            value={isAnyLoan ? form.counterparty : form.description}
-            onChange={e => {
-              if (type === 'loan_given')    { set('counterparty', e.target.value); set('description', `Loan to ${e.target.value}`) }
-              else if (type === 'loan_received') { set('counterparty', e.target.value); set('description', `Loan from ${e.target.value}`) }
-              else                          { set('description', e.target.value) }
-            }} required />
-        </Field>
+        {isReallocation ? (
+          <>
+            <Field label="From Project *">
+              <select className="input" value={form.from_project_id} onChange={e => { set('from_project_id', e.target.value); set('from_investor_id', '') }}>
+                <option value="">Pick source project</option>
+                {projects.filter(p => p.status !== 'completed' || true).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </Field>
+            {form.from_project_id && (
+              <Field label="From Investor *">
+                <select className="input" value={form.from_investor_id} onChange={e => set('from_investor_id', e.target.value)}>
+                  <option value="">Pick investor</option>
+                  {investors.data.map(i => (
+                    <option key={i.investor_id} value={i.investor_id}>
+                      {i.investor_name} ({i.share_percent}%)
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+            <Field label="To Project *">
+              <select className="input" value={form.to_project_id} onChange={e => set('to_project_id', e.target.value)}>
+                <option value="">Pick destination project</option>
+                {projects.filter(p => p.id !== form.from_project_id).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Notes">
+              <input className="input" placeholder="e.g. Profit + capital from Project A" value={form.description}
+                onChange={e => set('description', e.target.value)} />
+              <p className="text-[10px] text-gray-400 mt-1">
+                Creates a refund on the source project and a top-up on the destination — both linked. Destination must already have a same-named investor.
+              </p>
+            </Field>
+          </>
+        ) : (
+          <Field label={
+            type === 'loan_given'    ? 'Borrower Name'
+            : type === 'loan_received' ? 'Lender Name'
+            : 'Description *'
+          }>
+            <input className="input"
+              placeholder={isAnyLoan ? "Person or organization's name" : 'Description'}
+              value={isAnyLoan ? form.counterparty : form.description}
+              onChange={e => {
+                if (type === 'loan_given')    { set('counterparty', e.target.value); set('description', `Loan to ${e.target.value}`) }
+                else if (type === 'loan_received') { set('counterparty', e.target.value); set('description', `Loan from ${e.target.value}`) }
+                else                          { set('description', e.target.value) }
+              }} required />
+          </Field>
+        )}
 
         <Field label="Amount (₹) *">
           <input className="input" type="number" placeholder="0" value={form.amount}
