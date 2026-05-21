@@ -532,6 +532,32 @@ export async function reallocateInvestorPosition({ sourceInvestorId, destProject
   return data
 }
 
+export async function transferFundsAsLoan({ sourceInvestorId, destInvestorId, amount, interestPct, date, notes }) {
+  const { data, error } = await supabase.rpc('transfer_funds_as_loan', {
+    p_source_investor_id: sourceInvestorId,
+    p_dest_investor_id:   destInvestorId,
+    p_amount:             amount,
+    p_interest_pct:       interestPct ?? 0,
+    p_date:               isoDate(date),
+    p_notes:              notes ?? null,
+  })
+  if (error) throw error
+  return data
+}
+
+// All investor records visible to the current user (across projects),
+// used for the inter-investor lending picker.
+export function useAllInvestors() {
+  return useFetch(async () => {
+    const { data, error } = await supabase
+      .from('investors')
+      .select('id, project_id, name, share_percent, amount_invested')
+      .order('name')
+    if (error) throw error
+    return data ?? []
+  })
+}
+
 // ── Cross-project investor summary (for the owner's dashboard) ──
 // Aggregates every investor record visible to the user, groups by name,
 // and computes their consolidated position across all projects.
