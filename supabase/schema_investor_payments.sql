@@ -187,7 +187,7 @@ select
     (select sum(case when payment_type = 'refund' then -amount else amount end)
      from investor_payments where investor_id = i.id),
     i.amount_invested
-  )                                                                 as amount_invested,
+  )::numeric(15,2)                                                  as amount_invested,
   p.name                                                            as project_name,
   p.status                                                          as project_status,
   p.total_value,
@@ -235,7 +235,7 @@ select
     (select sum(case when payment_type = 'refund' then -amount else amount end)
      from investor_payments where investor_id = i.id),
     i.amount_invested
-  ) as amount_invested,
+  )::numeric(15,2) as amount_invested,
   i.share_percent,
   coalesce(
     (select sum(pr.amount * i.share_percent / 100)
