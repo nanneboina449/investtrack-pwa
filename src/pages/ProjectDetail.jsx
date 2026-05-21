@@ -501,13 +501,26 @@ export default function ProjectDetail() {
               <Empty icon="⚖️" title="No balance data" sub="Add investors first" />
             ) : (
               balances.data.map(b => {
-                // Resolve profit_allocated from profit_distributions (respects custom splits)
+                // Resolve from actual ledger data — view's amount_invested is
+                // commitment, not real cash. Sum payments (refunds subtract)
+                // and distributions (custom-aware).
+                const invPayments = payments.data.filter(p => p.investor_id === b.investor_id)
+                const paidIn = invPayments.reduce(
+                  (s, p) => s + (p.payment_type === 'refund' ? -p.amount : p.amount), 0
+                )
                 const bDists = distributions.data.filter(d => d.investor_id === b.investor_id)
                 const ledgerActive = distributions.data.length > 0 || profits.data.length === 0
                 const profitAllocated = ledgerActive
                   ? bDists.reduce((s, d) => s + Number(d.amount || 0), 0)
                   : (b.profit_allocated ?? 0)
-                const effective = b.amount_invested + profitAllocated - b.money_loaned_out + b.money_repaid_received + b.money_moved_to_projects
+                const committed   = b.amount_invested ?? 0
+                const expShare    = b.total_expenses_allocated ?? 0
+                const outstanding = committed + expShare - paidIn
+                // Effective: real cash position in this project after all flows
+                const effective = paidIn + profitAllocated - expShare
+                  - (b.money_loaned_out ?? 0)
+                  + (b.money_repaid_received ?? 0)
+                  + (b.money_moved_to_projects ?? 0)
                 return (
                   <div key={b.investor_id} className="card p-4">
                     <div className="flex justify-between items-center mb-3">
@@ -516,18 +529,22 @@ export default function ProjectDetail() {
                         <p className="text-xs text-gray-400">{b.share_percent}% share</p>
                       </div>
                       <div className="text-right">
-                        <p className="font-bold text-emerald-600 mono">{inr(effective)}</p>
+                        <p className={`font-bold mono ${effective >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{inr(effective)}</p>
                         <p className="text-[10px] text-gray-400">effective balance</p>
                       </div>
                     </div>
                     <div className="space-y-1.5 text-xs border-t border-gray-50 pt-3">
                       {[
-                        { l: 'Amount invested',     v: inr(b.amount_invested),              c: 'text-gray-700' },
+                        { l: 'Committed',           v: inr(committed),                       c: 'text-gray-700' },
+                        { l: 'Paid in (ledger)',    v: inr(paidIn),                          c: 'text-emerald-700' },
                         { l: '+ Profit allocated',  v: `+${inr(profitAllocated)}`,           c: 'text-emerald-600' },
-                        { l: '− Expenses charged',  v: `-${inr(b.total_expenses_allocated ?? 0)}`, c: 'text-red-500' },
+                        { l: '− Expenses charged',  v: `-${inr(expShare)}`,                  c: 'text-red-500' },
                         { l: '− Loaned out',         v: `-${inr(b.money_loaned_out)}`,        c: 'text-red-500' },
                         { l: '+ Repaid received',   v: `+${inr(b.money_repaid_received)}`,   c: 'text-emerald-600' },
                         { l: '+ Moved to projects', v: `+${inr(b.money_moved_to_projects)}`, c: 'text-blue-600' },
+                        { l: outstanding > 0.5 ? 'Still owes' : outstanding < -0.5 ? 'Refund due' : 'Settled',
+                          v: inr(Math.abs(outstanding)),
+                          c: outstanding > 0.5 ? 'text-amber-600' : outstanding < -0.5 ? 'text-blue-600' : 'text-emerald-600' },
                       ].map(({ l, v, c }) => (
                         <div key={l} className="flex justify-between">
                           <span className="text-gray-400">{l}</span>
