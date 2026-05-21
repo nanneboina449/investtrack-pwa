@@ -142,87 +142,17 @@ begin
 end;
 $$;
 
--- 5. Update investor_profit_summary view to sum from profit_distributions
--- instead of recomputing share_percent every query. Column types and
--- order are preserved so create-or-replace accepts the change.
-create or replace view investor_profit_summary as
-select
-  i.id                                                              as investor_id,
-  i.project_id,
-  i.name                                                            as investor_name,
-  i.share_percent,
-  i.amount_invested,
-  p.name                                                            as project_name,
-  p.status                                                          as project_status,
-  p.total_value,
-  p.our_stake_percent,
-  round(p.total_value * p.our_stake_percent / 100, 2)              as our_pool_value,
-  coalesce(
-    (select sum(pd.amount)
-     from profit_distributions pd where pd.investor_id = i.id), 0
-  )                                                                 as total_profit_allocated,
-  coalesce(
-    (select sum(pe.amount * i.share_percent / 100)
-     from project_expenses pe where pe.project_id = i.project_id), 0
-  )                                                                 as total_expenses_allocated,
-  coalesce(
-    (select sum(pd.amount)
-     from profit_distributions pd where pd.investor_id = i.id), 0
-  ) -
-  coalesce(
-    (select sum(pe.amount * i.share_percent / 100)
-     from project_expenses pe where pe.project_id = i.project_id), 0
-  )                                                                 as net_return,
-  i.amount_invested +
-  coalesce(
-    (select sum(pd.amount)
-     from profit_distributions pd where pd.investor_id = i.id), 0
-  ) -
-  coalesce(
-    (select sum(pe.amount * i.share_percent / 100)
-     from project_expenses pe where pe.project_id = i.project_id), 0
-  )                                                                 as current_value
-from investors i
-join projects p on p.id = i.project_id;
-
--- 6. Update investor_running_balance view similarly
-create or replace view investor_running_balance as
-select
-  i.id            as investor_id,
-  i.project_id,
-  i.name          as investor_name,
-  p.name          as project_name,
-  i.amount_invested,
-  i.share_percent,
-  coalesce(
-    (select sum(pd.amount)
-     from profit_distributions pd where pd.investor_id = i.id), 0
-  ) as profit_allocated,
-  coalesce(
-    (select sum(pe.amount * i.share_percent / 100)
-     from project_expenses pe where pe.project_id = i.project_id), 0
-  ) as total_expenses_allocated,
-  coalesce(
-    (select sum(lc.amount)
-     from loan_contributions lc
-     join cash_adjustments ca on ca.id = lc.loan_id
-     where lc.investor_id = i.id and ca.type = 'loan_given' and ca.is_settled = false), 0
-  ) as money_loaned_out,
-  coalesce(
-    (select sum(rd.amount_returned)
-     from repayment_distributions rd
-     join loan_repayments lr on lr.id = rd.repayment_id
-     join loan_contributions lc on lc.id = rd.loan_contribution_id
-     join cash_adjustments ca on ca.id = lc.loan_id
-     where lc.investor_id = i.id and lr.repayment_type = 'cash'), 0
-  ) as money_repaid_received,
-  coalesce(
-    (select sum(rd.amount_returned)
-     from repayment_distributions rd
-     join loan_repayments lr on lr.id = rd.repayment_id
-     join loan_contributions lc on lc.id = rd.loan_contribution_id
-     join cash_adjustments ca on ca.id = lc.loan_id
-     where lc.investor_id = i.id and lr.repayment_type = 'project_adjustment'), 0
-  ) as money_moved_to_projects
-from investors i
-join projects p on p.id = i.project_id;
+-- NOTE: The two existing views (investor_profit_summary and
+-- investor_running_balance) are intentionally NOT updated here.
+-- Postgres rejects `create or replace view` whenever a dependent view
+-- (my_investments) references the changed column, even when the type
+-- is preserved (error 42P16, "cannot drop columns from view").
+--
+-- Workaround: keep the views as-is. For DEFAULT splits, the view's
+-- proportional calculation equals the sum of profit_distributions
+-- (because backfill seeded them proportionally), so totals stay correct.
+-- For CUSTOM splits, the Profits tab on ProjectDetail.jsx reads
+-- profit_distributions directly so per-record amounts are always
+-- accurate; aggregated views (dashboard, balances tab) will show the
+-- proportional split for any custom records — accept that minor
+-- discrepancy or compute on the frontend if exact totals are needed.
