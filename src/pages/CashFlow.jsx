@@ -1,6 +1,6 @@
 // src/pages/CashFlow.jsx
 import { useState } from 'react'
-import { useCashFlow, useLoans, useProjects, useInvestors, useAllInvestors, createLoan, recordRepayment, markSettled, reallocateInvestorPosition, updateLoan, updateCashAdjustment } from '../hooks/useData'
+import { useCashFlow, useLoans, useProjects, useInvestors, useAllInvestors, createLoan, recordRepayment, markSettled, reallocateInvestorPosition, updateLoan, updateCashAdjustment, deleteCashAdjustment } from '../hooks/useData'
 import { inr, isoDate } from '../lib/supabase'
 import { Sheet, Field, SegControl, Spinner, Empty, ProgressBar, useToast } from '../components/ui'
 
@@ -476,8 +476,9 @@ function EditTransactionSheet({ tx, onClose, onSaved }) {
     interest_rate_percent: tx.interest_rate_percent ?? '',
     adjustment_date:       tx.adjustment_date ?? isoDate(),
   })
-  const [saving, setSaving] = useState(false)
-  const [error, setError]   = useState(null)
+  const [saving, setSaving]     = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [error, setError]       = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const submit = async () => {
@@ -499,13 +500,34 @@ function EditTransactionSheet({ tx, onClose, onSaved }) {
     } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
 
+  const handleDelete = async () => {
+    const label = tx.type === 'loan_given' ? 'loan'
+      : tx.type === 'loan_received' ? 'loan'
+      : tx.type === 'reallocation' ? 'reallocation'
+      : 'transaction'
+    if (!confirm(
+      `Delete this ${label}?` +
+      (isLoan ? '\n\nAll contributions and repayments cascade. For inter-investor loans, the paired refund + top-up payment rows will also be removed.' : '')
+    )) return
+    setDeleting(true); setError(null)
+    try {
+      await deleteCashAdjustment(tx.id)
+      onSaved()
+    } catch (e) { setError(e.message); setDeleting(false) }
+  }
+
   return (
     <Sheet open={true} onClose={onClose}
       title={`Edit ${tx.type === 'loan_given' ? 'Loan Given' : tx.type === 'loan_received' ? 'Loan Received' : tx.type === 'reallocation' ? 'Reallocation' : 'Transaction'}`}
       footer={
-        <div>
-          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
-          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button>
+        <div className="space-y-2">
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+          <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving || deleting}>{saving ? 'Saving…' : 'Save Changes'}</button>
+          <button type="button" onClick={handleDelete}
+            className="w-full text-sm font-semibold text-red-600 bg-red-50 rounded-xl py-2.5 active:scale-95 transition-transform disabled:opacity-50"
+            disabled={saving || deleting}>
+            {deleting ? 'Deleting…' : '🗑 Delete'}
+          </button>
         </div>
       }>
       <div className="space-y-4">
