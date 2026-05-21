@@ -177,9 +177,14 @@ export default function ProjectDetail() {
                 const paid = invPayments.reduce(
                   (s, p) => s + (p.payment_type === 'refund' ? -p.amount : p.amount), 0
                 )
+                // Sum stored distributions so custom-split profits show correctly
+                // (falls back to view's proportional total if distributions aren't loaded yet)
+                const invDists = distributions.data.filter(d => d.investor_id === inv.investor_id)
+                const profit   = invDists.length > 0
+                  ? invDists.reduce((s, d) => s + Number(d.amount || 0), 0)
+                  : (inv.total_profit_allocated ?? 0)
                 const committed   = inv.amount_invested ?? 0
                 const expShare    = inv.total_expenses_allocated ?? 0
-                const profit      = inv.total_profit_allocated ?? 0
                 const outstanding = committed + expShare - paid
                 const owesProject = outstanding > 0.5
                 const projectOwes = outstanding < -0.5
