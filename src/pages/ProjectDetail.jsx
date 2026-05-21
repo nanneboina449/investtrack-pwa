@@ -178,9 +178,11 @@ export default function ProjectDetail() {
                 )
                 const committed   = inv.amount_invested ?? 0
                 const expShare    = inv.total_expenses_allocated ?? 0
+                const profit      = inv.total_profit_allocated ?? 0
                 const outstanding = committed + expShare - paid
                 const owesProject = outstanding > 0.5
                 const projectOwes = outstanding < -0.5
+                const roi         = committed > 0 ? (profit / committed) * 100 : 0
                 return (
                   <div key={inv.investor_id} className="card p-4">
                     <div className="flex justify-between items-start mb-3">
@@ -210,14 +212,23 @@ export default function ProjectDetail() {
                         </p>
                       </div>
                       <div>
-                        <p className="text-xs font-bold mono text-emerald-600">{inr(inv.total_profit_allocated ?? 0)}</p>
+                        <p className="text-xs font-bold mono text-emerald-600">{inr(profit)}</p>
                         <p className="text-[10px] text-gray-400 mt-0.5">Profit</p>
                       </div>
                     </div>
-                    {expShare > 0 && (
-                      <p className="text-[10px] text-gray-400 mt-2 pt-2 border-t border-gray-50">
-                        Owes = committed {inr(committed)} + expense share {inr(expShare)} − paid {inr(paid)}
-                      </p>
+                    {(expShare > 0 || profit > 0) && (
+                      <div className="mt-2 pt-2 border-t border-gray-50 space-y-1">
+                        {expShare > 0 && (
+                          <p className="text-[10px] text-gray-400">
+                            Owes = committed {inr(committed)} + expense share {inr(expShare)} − paid {inr(paid)}
+                          </p>
+                        )}
+                        {profit > 0 && committed > 0 && (
+                          <p className="text-[10px] text-emerald-700 font-medium">
+                            ROI on contribution: {roi.toFixed(2)}% ({inr(profit)} on {inr(committed)})
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
                 )
@@ -495,14 +506,16 @@ export default function ProjectDetail() {
 
 function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotalValue, stakePercent, remainingShare, onSaved }) {
   const [form, setForm] = useState({ name: '', email: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
-  const [autoAmt, setAutoAmt] = useState(true)
+  const [mode, setMode] = useState('share_split') // 'share_split' or 'custom_amount'
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const handleShare = (v) => {
     set('share_percent', v)
-    if (autoAmt && projectValue) set('amount_invested', ((parseFloat(v)||0) * projectValue / 100).toFixed(0))
+    if (mode === 'share_split' && projectValue) {
+      set('amount_invested', ((parseFloat(v)||0) * projectValue / 100).toFixed(0))
+    }
   }
 
   const submit = async () => {
@@ -532,7 +545,10 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
     } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
 
-  const computedAmt = ((parseFloat(form.share_percent)||0) * projectValue / 100)
+  const computedAmt  = ((parseFloat(form.share_percent)||0) * projectValue / 100)
+  const enteredAmt   = parseFloat(form.amount_invested) || 0
+  const sharePct     = parseFloat(form.share_percent) || 0
+  const isCustomMode = mode === 'custom_amount'
 
   return (
     <Sheet
@@ -542,10 +558,16 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
       footer={
         <div className="space-y-2">
           {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
-          {form.share_percent && (
+          {!isCustomMode && form.share_percent && (
             <div className="flex items-center justify-between text-xs text-brand-700 bg-brand-50 rounded-xl px-3 py-2">
-              <span>Amount from pool</span>
+              <span>Auto-filled from pool</span>
               <span className="font-bold mono">{inr(computedAmt)}</span>
+            </div>
+          )}
+          {isCustomMode && enteredAmt > 0 && sharePct > 0 && (
+            <div className="flex items-center justify-between text-xs text-purple-700 bg-purple-50 rounded-xl px-3 py-2">
+              <span>{sharePct}% profit on ₹{(enteredAmt/1000).toFixed(0)}k contribution</span>
+              <span className="font-bold mono">custom split</span>
             </div>
           )}
           <button type="button" onClick={submit} className="btn-primary w-full" disabled={saving}>
@@ -555,12 +577,33 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
       }
     >
       <div className="space-y-4">
+        {/* Investment mode toggle */}
+        <div>
+          <SegControl
+            value={mode}
+            onChange={setMode}
+            options={[
+              { value: 'share_split',   label: 'Share Split' },
+              { value: 'custom_amount', label: 'Custom Amount' },
+            ]}
+          />
+          <p className="text-[11px] text-gray-500 mt-2 px-1">
+            {isCustomMode
+              ? 'Enter the actual amount each investor put in. Share % drives profit split — they can be unequal.'
+              : 'Share % auto-fills the committed amount from the project pool. Everyone\'s commitment scales with their share.'}
+          </p>
+        </div>
+
         {/* Pool info */}
         <div className="bg-blue-50 rounded-xl px-3 py-2.5 text-xs text-blue-800">
           <p className="font-semibold">Pool = {inr(projectValue)}
             <span className="font-normal text-blue-500 ml-1">({stakePercent}% of {inr(projectTotalValue)})</span>
           </p>
-          <p className="text-blue-500 mt-0.5">Share % splits this pool · {remainingShare.toFixed(1)}% still available</p>
+          <p className="text-blue-500 mt-0.5">
+            {isCustomMode
+              ? `Informational only in Custom mode · ${remainingShare.toFixed(1)}% profit share still available`
+              : `Share % splits this pool · ${remainingShare.toFixed(1)}% still available`}
+          </p>
         </div>
 
         {/* Required fields */}
@@ -570,17 +613,36 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label={`Share % *`}>
-            <input className="input" type="number" step="0.01" min="0.01"
-              max={remainingShare} placeholder="25"
-              value={form.share_percent} onChange={e => handleShare(e.target.value)} />
-          </Field>
-          <Field label="Committed Amount (₹) *">
-            <input className="input" type="number" placeholder="0"
-              value={form.amount_invested}
-              onChange={e => { setAutoAmt(false); set('amount_invested', e.target.value) }} />
-            <p className="text-[10px] text-gray-400 mt-1">Their stake / what they owe — record actual payments later via + Payment.</p>
-          </Field>
+          {isCustomMode ? (
+            <>
+              <Field label="Committed Amount (₹) *">
+                <input className="input" type="number" placeholder="0"
+                  value={form.amount_invested}
+                  onChange={e => set('amount_invested', e.target.value)} autoFocus />
+                <p className="text-[10px] text-gray-400 mt-1">Their actual contribution to the pool.</p>
+              </Field>
+              <Field label="Profit Share % *">
+                <input className="input" type="number" step="0.01" min="0.01"
+                  max={remainingShare} placeholder="33.33"
+                  value={form.share_percent} onChange={e => handleShare(e.target.value)} />
+                <p className="text-[10px] text-gray-400 mt-1">Independent of amount. Drives profit / expense split.</p>
+              </Field>
+            </>
+          ) : (
+            <>
+              <Field label="Share % *">
+                <input className="input" type="number" step="0.01" min="0.01"
+                  max={remainingShare} placeholder="25"
+                  value={form.share_percent} onChange={e => handleShare(e.target.value)} />
+              </Field>
+              <Field label="Committed Amount (₹) *">
+                <input className="input" type="number" placeholder="0"
+                  value={form.amount_invested}
+                  onChange={e => set('amount_invested', e.target.value)} />
+                <p className="text-[10px] text-gray-400 mt-1">Auto-filled from share. Editable.</p>
+              </Field>
+            </>
+          )}
         </div>
 
         {/* Optional fields */}
