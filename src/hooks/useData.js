@@ -255,6 +255,32 @@ export async function deleteExpense(id) {
   if (error) throw error
 }
 
+// ── Investor Payments (per-project ledger) ────────────────────
+export function useInvestorPayments(projectId) {
+  return useFetch(async () => {
+    if (!projectId) return []
+    const { data, error } = await supabase
+      .from('investor_payment_history')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('payment_date', { ascending: false })
+    if (error) throw error
+    return data
+  }, [projectId])
+}
+
+export async function createPayment(values) {
+  const { error } = await supabase
+    .from('investor_payments')
+    .insert({ ...values, payment_date: isoDate(values.payment_date) })
+  if (error) throw error
+}
+
+export async function deletePayment(id) {
+  const { error } = await supabase.from('investor_payments').delete().eq('id', id)
+  if (error) throw error
+}
+
 // ── My investments (as investor across all projects) ──────────
 export function useMyInvestments() {
   return useFetch(async () => {
