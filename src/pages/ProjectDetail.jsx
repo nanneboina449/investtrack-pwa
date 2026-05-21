@@ -1781,6 +1781,23 @@ function EditProjectSheet({ open, onClose, project, onSaved }) {
               onChange={e => set('our_stake_percent', e.target.value)} />
           </Field>
         </div>
+        {(() => {
+          const oldPool = (project?.total_value ?? 0) * (project?.our_stake_percent ?? 100) / 100
+          const newPool = (parseFloat(form.total_value) || 0) * (parseFloat(form.our_stake_percent) || 100) / 100
+          if (Math.abs(newPool - oldPool) < 0.5) return null
+          const delta = newPool - oldPool
+          return (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs space-y-1">
+              <p className="text-amber-800 font-semibold">
+                Investor commitments will scale {delta > 0 ? 'up' : 'down'} proportionally
+              </p>
+              <p className="text-amber-700">
+                Pool changes from {inr(oldPool)} to {inr(newPool)} ({delta > 0 ? '+' : ''}{inr(delta)}).
+                Every investor&apos;s committed amount is multiplied by {(newPool / oldPool).toFixed(3)}× to keep their share %.
+              </p>
+            </div>
+          )
+        })()}
         <Field label="Status">
           <select className="input" value={form.status} onChange={e => set('status', e.target.value)}>
             <option value="upcoming">Upcoming</option>
