@@ -113,6 +113,35 @@ create trigger expenses_to_payment
   for each row execute function sync_expense_to_payment();
 
 -- ============================================================
+-- 4b. TRIGGER: scale investor commitments when project pool changes
+-- ============================================================
+create or replace function scale_investor_commitments_on_project_change()
+returns trigger
+language plpgsql
+as $$
+declare
+  old_pool numeric;
+  new_pool numeric;
+begin
+  old_pool := coalesce(OLD.total_value, 0) * coalesce(OLD.our_stake_percent, 100) / 100;
+  new_pool := coalesce(NEW.total_value, 0) * coalesce(NEW.our_stake_percent, 100) / 100;
+
+  if old_pool > 0 and abs(new_pool - old_pool) > 0.01 then
+    update investors
+    set amount_invested = round(amount_invested * (new_pool / old_pool), 2)
+    where project_id = NEW.id;
+  end if;
+
+  return NEW;
+end;
+$$;
+
+drop trigger if exists projects_scale_investor_commitments on projects;
+create trigger projects_scale_investor_commitments
+  after update of total_value, our_stake_percent on projects
+  for each row execute function scale_investor_commitments_on_project_change();
+
+-- ============================================================
 -- 5. RLS POLICIES — re-create idempotently
 -- ============================================================
 alter table investor_payments      enable row level security;
