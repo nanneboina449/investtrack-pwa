@@ -1238,7 +1238,19 @@ function MoveInvestorPositionSheet({ investor, projects = [], currentProjectId, 
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState(null)
 
-  const destProject = projects.find(p => p.id === destProjectId)
+  // Only allow destinations where this investor already exists (matched
+  // case + whitespace insensitive). If they need to move to a new project,
+  // they add the investor on that project first via Add Investor.
+  const allInvestorsHook = useAllInvestors()
+  const normalize = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+  const sourceNameKey = normalize(investor.investor_name)
+  const validDestProjects = projects.filter(p =>
+    p.id !== currentProjectId &&
+    (allInvestorsHook.data ?? []).some(i =>
+      i.project_id === p.id && normalize(i.name) === sourceNameKey
+    )
+  )
+  const destProject = validDestProjects.find(p => p.id === destProjectId)
 
   const submit = async () => {
     if (!destProjectId) { setError('Pick a destination project'); return }
@@ -1276,12 +1288,24 @@ function MoveInvestorPositionSheet({ investor, projects = [], currentProjectId, 
         </div>
 
         <Field label="Destination Project *">
-          <select className="input" value={destProjectId} onChange={e => setDestProjectId(e.target.value)} autoFocus>
-            <option value="">Pick a project</option>
-            {projects.filter(p => p.id !== currentProjectId).map(p => (
+          <select className="input" value={destProjectId}
+            onChange={e => setDestProjectId(e.target.value)}
+            disabled={validDestProjects.length === 0}
+            autoFocus>
+            <option value="">
+              {validDestProjects.length === 0
+                ? `No other project has ${investor.investor_name} as an investor`
+                : 'Pick a project'}
+            </option>
+            {validDestProjects.map(p => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
+          {validDestProjects.length === 0 && (
+            <p className="text-[11px] text-amber-700 bg-amber-50 rounded-lg px-2 py-1.5 mt-2">
+              Only projects where {investor.investor_name} already exists are listed. Add them as an investor on the destination project first, then try again.
+            </p>
+          )}
         </Field>
 
         <Field label="Amount (₹) *">
