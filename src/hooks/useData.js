@@ -428,21 +428,34 @@ export async function updateExpense(id, values) {
 export function useInvestorPayments(projectId) {
   return useFetch(async () => {
     if (!projectId) return []
-    // Query the table directly so we can pull the link columns too
-    // (the investor_payment_history view doesn't include them).
+    // Plain select — don't embed `investors(...)` because investor_payments
+    // has 3 FK columns to investors (investor_id, source_investor_id,
+    // destination_investor_id) and PostgREST can't disambiguate them.
+    // The UI looks up investor_name from the parent's investors list.
     const { data, error } = await supabase
       .from('investor_payments')
-      .select('id, investor_id, project_id, amount, payment_type, payment_date, notes, expense_id, source_project_id, source_investor_id, destination_project_id, destination_investor_id, investors(name, share_percent), project_expenses(category, description)')
+      .select('*')
       .eq('project_id', projectId)
       .order('payment_date', { ascending: false })
     if (error) throw error
-    // Flatten the embedded shapes so the UI keeps reading the same fields
-    return (data ?? []).map(r => ({
+    if (!data || data.length === 0) return []
+
+    // Fetch linked expense info separately so the Payments tab can show
+    // "Paid X expense" descriptions for expense_paid rows.
+    const expenseIds = [...new Set(data.map(p => p.expense_id).filter(Boolean))]
+    let expenseMap = {}
+    if (expenseIds.length > 0) {
+      const { data: exps } = await supabase
+        .from('project_expenses')
+        .select('id, category, description')
+        .in('id', expenseIds)
+      expenseMap = Object.fromEntries((exps ?? []).map(e => [e.id, e]))
+    }
+
+    return data.map(r => ({
       ...r,
-      investor_name:       r.investors?.name ?? null,
-      share_percent:       r.investors?.share_percent ?? null,
-      expense_category:    r.project_expenses?.category ?? null,
-      expense_description: r.project_expenses?.description ?? null,
+      expense_category:    expenseMap[r.expense_id]?.category    ?? null,
+      expense_description: expenseMap[r.expense_id]?.description ?? null,
     }))
   }, [projectId])
 }
