@@ -183,8 +183,9 @@ export function useInvestorBalances(projectId) {
 
 // ── Dashboard aggregate ───────────────────────────────────────
 export function useDashboard() {
-  const projects = useProjects()
-  const cashflow = useCashFlow()
+  const projects    = useProjects()
+  const cashflow    = useCashFlow()
+  const investments = useMyInvestments()
 
   const summary = {
     totalInvested:    0,
@@ -197,10 +198,15 @@ export function useDashboard() {
     netCash:          0,
   }
 
+  // Portfolio numbers come from the user's investor positions (per-share),
+  // NOT from my_projects totals — otherwise a 30% investor sees 100% of project values.
+  for (const inv of investments.data) {
+    summary.totalInvested += inv.amount_invested ?? 0
+    summary.totalProfit   += inv.net_return ?? 0
+    summary.totalValue    += inv.current_value ?? 0
+  }
+
   for (const p of projects.data) {
-    summary.totalInvested += p.total_raised ?? 0
-    summary.totalProfit   += p.total_profit ?? 0
-    summary.totalValue    += (p.total_raised ?? 0) + (p.total_profit ?? 0)
     if (p.status === 'active')   summary.activeProjects++
     if (p.status === 'upcoming') summary.upcomingProjects++
   }
@@ -221,7 +227,7 @@ export function useDashboard() {
   return {
     summary,
     projects,
-    loading: projects.loading || cashflow.loading,
+    loading: projects.loading || cashflow.loading || investments.loading,
   }
 }
 
