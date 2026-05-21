@@ -273,9 +273,10 @@ create index if not exists investors_normalized_name_idx
   on investors (project_id, (lower(trim(name))));
 
 -- ============================================================
--- 7. BACKFILL profit_distributions for any pre-existing profit
---    records that don't yet have rows. Idempotent.
+-- 7. BACKFILLS for historical data
 -- ============================================================
+
+-- 7a. profit_distributions for pre-existing profit records
 insert into profit_distributions (profit_id, investor_id, amount)
 select
   pr.id, i.id,
@@ -286,6 +287,20 @@ where not exists (
   select 1 from profit_distributions pd
   where pd.profit_id = pr.id and pd.investor_id = i.id
 );
+
+-- 7b. investor_payments rows for expenses that have paid_by_investor_id
+--     set but never got a matching payment row (likely created before the
+--     trigger existed, or before this migration ran).
+insert into investor_payments
+  (investor_id, project_id, amount, payment_type, expense_id, payment_date, notes)
+select
+  e.paid_by_investor_id, e.project_id, e.amount, 'expense_paid', e.id,
+  e.expense_date, 'Paid ' || e.category || ' expense (backfilled)'
+from project_expenses e
+where e.paid_by_investor_id is not null
+  and not exists (
+    select 1 from investor_payments p where p.expense_id = e.id
+  );
 
 -- ============================================================
 -- 8. VIEWS — replace with current versions

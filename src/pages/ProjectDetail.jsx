@@ -1059,6 +1059,41 @@ function AddExpenseSheet({ open, onClose, projectId, investors = [], onSaved }) 
       }>
       <form onSubmit={submit} className="space-y-4">
 
+        {/* PAID BY — moved to the top so it's not missed. Quick-pick buttons
+            cover the typical case (one of the investors paid). Selecting an
+            investor here auto-credits them with the full amount in their
+            payment ledger; the expense itself still splits by share %.       */}
+        <Field label="Paid by *">
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button"
+              onClick={() => set('paid_by_investor_id', '')}
+              className={`text-xs py-2 px-3 rounded-xl border text-left transition-all
+                ${!form.paid_by_investor_id
+                  ? 'border-brand-900 bg-brand-50 text-brand-900 font-semibold'
+                  : 'border-gray-200 text-gray-600'}`}>
+              🏛️ Project funds
+            </button>
+            {investors.map(inv => (
+              <button key={inv.investor_id} type="button"
+                onClick={() => set('paid_by_investor_id', inv.investor_id)}
+                className={`text-xs py-2 px-3 rounded-xl border text-left transition-all
+                  ${form.paid_by_investor_id === inv.investor_id
+                    ? 'border-blue-500 bg-blue-50 text-blue-800 font-semibold'
+                    : 'border-gray-200 text-gray-600'}`}>
+                <span className="truncate block">{inv.investor_name}</span>
+                <span className="text-[10px] text-gray-400">{inv.share_percent}% share</span>
+              </button>
+            ))}
+          </div>
+          {form.paid_by_investor_id ? (
+            <p className="text-[10px] text-blue-700 mt-2 bg-blue-50 rounded-lg px-2 py-1.5">
+              ✓ The selected investor is credited with the full amount in their payment ledger. The expense itself still splits by share %, so other investors absorb their share.
+            </p>
+          ) : (
+            <p className="text-[10px] text-gray-500 mt-1.5">No investor is credited — the expense reduces the project's net profit and everyone absorbs their share.</p>
+          )}
+        </Field>
+
         <Field label="Category">
           <div className="grid grid-cols-2 gap-2">
             {CATEGORIES.map(c => (
@@ -1087,23 +1122,6 @@ function AddExpenseSheet({ open, onClose, projectId, investors = [], onSaved }) 
         <Field label="Date">
           <input className="input" type="date" value={form.expense_date}
             onChange={e => set('expense_date', e.target.value)} />
-        </Field>
-
-        <Field label="Paid by">
-          <select className="input" value={form.paid_by_investor_id}
-            onChange={e => set('paid_by_investor_id', e.target.value)}>
-            <option value="">Project funds (default)</option>
-            {investors.map(inv => (
-              <option key={inv.investor_id} value={inv.investor_id}>
-                {inv.investor_name} ({inv.share_percent}%)
-              </option>
-            ))}
-          </select>
-          {form.paid_by_investor_id && (
-            <p className="text-[10px] text-blue-700 mt-1.5 bg-blue-50 rounded-lg px-2 py-1.5">
-              ✓ Will credit this investor with the full amount, and still split the expense by share %
-            </p>
-          )}
         </Field>
 
         <Field label="Notes">
