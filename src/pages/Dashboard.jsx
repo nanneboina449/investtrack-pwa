@@ -219,12 +219,14 @@ function PortfolioDonut({ projects }) {
 // ── Investor running totals (cross-project) ──────────────────
 function InvestorRunningTotals({ groups }) {
   const totals = groups.reduce((a, g) => ({
-    committed:   a.committed   + g.totals.committed,
-    paid:        a.paid        + g.totals.paid,
-    profit:      a.profit      + g.totals.profit,
-    outstanding: a.outstanding + g.totals.outstanding,
-    available:   a.available   + (g.totals.available ?? 0),
-  }), { committed: 0, paid: 0, profit: 0, outstanding: 0, available: 0 })
+    committed:      a.committed      + g.totals.committed,
+    paid:           a.paid           + g.totals.paid,
+    profit:         a.profit         + g.totals.profit,
+    expense_share:  a.expense_share  + g.totals.expense_share,
+    outstanding:    a.outstanding    + g.totals.outstanding,
+    loansGiven:     a.loansGiven     + (g.totals.loansGiven ?? 0),
+    runningBalance: a.runningBalance + (g.totals.runningBalance ?? 0),
+  }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, loansGiven:0, runningBalance:0 })
 
   return (
     <section>
@@ -233,29 +235,30 @@ function InvestorRunningTotals({ groups }) {
         <span className="text-xs text-gray-400">{groups.length} {groups.length === 1 ? 'investor' : 'investors'}</span>
       </div>
 
-      {/* Aggregate row */}
-      <div className="card p-4 mb-3 bg-brand-50 border-brand-100">
-        <div className="grid grid-cols-4 gap-1 text-center mb-3">
+      {/* Aggregate balance row — single headline number */}
+      <div className="card p-5 mb-3 bg-brand-50 border-brand-100">
+        <div className="flex justify-between items-center">
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-brand-500 font-semibold">Total Running Balance</p>
+            <p className="text-[10px] text-brand-400 mt-0.5">profit − expenses + net cash + outstanding loans owed back</p>
+          </div>
+          <p className={`font-bold mono text-2xl ${totals.runningBalance >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+            {totals.runningBalance >= 0 ? '+' : ''}{inr(totals.runningBalance)}
+          </p>
+        </div>
+        <div className="grid grid-cols-5 gap-1 text-center mt-4 pt-4 border-t border-brand-100">
           {[
-            { l: 'Committed', v: inr(totals.committed),                   c: 'text-brand-900' },
-            { l: 'Paid in',    v: inr(totals.paid),                        c: 'text-emerald-700' },
-            { l: 'Outstanding',v: inr(Math.abs(totals.outstanding)),       c: totals.outstanding > 0.5 ? 'text-amber-700' : totals.outstanding < -0.5 ? 'text-blue-700' : 'text-emerald-700' },
-            { l: 'Profit',     v: inr(totals.profit),                      c: 'text-emerald-700' },
+            { l: 'Profit',     v: inr(totals.profit),               c: 'text-emerald-700' },
+            { l: 'Expenses',   v: `-${inr(totals.expense_share)}`,   c: 'text-red-500' },
+            { l: 'Net cash',   v: `${totals.paid >= 0 ? '+' : ''}${inr(totals.paid)}`, c: totals.paid >= 0 ? 'text-emerald-700' : 'text-red-500' },
+            { l: 'Loans out',  v: inr(totals.loansGiven),           c: 'text-blue-700' },
+            { l: 'Committed',  v: inr(totals.committed),             c: 'text-brand-900' },
           ].map(({l, v, c}) => (
             <div key={l}>
-              <p className={`text-xs font-bold mono ${c}`}>{v}</p>
+              <p className={`text-[11px] font-bold mono ${c}`}>{v}</p>
               <p className="text-[10px] text-gray-500 mt-0.5">{l}</p>
             </div>
           ))}
-        </div>
-        <div className="flex justify-between items-center pt-3 border-t border-brand-100">
-          <div>
-            <p className="text-[10px] uppercase tracking-wide text-brand-500 font-semibold">Available balance</p>
-            <p className="text-[10px] text-brand-400">profit + external cash back − external cash put in</p>
-          </div>
-          <p className={`font-bold mono text-lg ${totals.available >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-            {totals.available >= 0 ? '+' : ''}{inr(totals.available)}
-          </p>
         </div>
       </div>
 
@@ -269,11 +272,8 @@ function InvestorRunningTotals({ groups }) {
 function InvestorRow({ group }) {
   const [open, setOpen] = useState(false)
   const { name, totals, projectCount, projects } = group
-  const owesProject = totals.outstanding > 0.5
-  const projectOwes = totals.outstanding < -0.5
-  const netPositive = totals.netGain >= 0
-  const available    = totals.available ?? 0
-  const availPositive = available >= 0
+  const runningBalance = totals.runningBalance ?? 0
+  const balancePositive = runningBalance >= 0
 
   // Bar chart data for the expanded view — one bar per project, two series
   const chartData = projects.map(p => ({
@@ -285,54 +285,57 @@ function InvestorRow({ group }) {
   return (
     <div className="card overflow-hidden">
       <button onClick={() => setOpen(!open)} className="w-full text-left p-4">
-        <div className="flex justify-between items-start mb-3">
+        <div className="flex justify-between items-start">
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-gray-900 truncate">{name}</p>
             <p className="text-xs text-gray-400 mt-0.5">{projectCount} project{projectCount === 1 ? '' : 's'} · {open ? 'tap to collapse' : 'tap for breakdown'}</p>
           </div>
           <div className="text-right ml-2">
-            <p className={`font-bold mono ${netPositive ? 'text-emerald-600' : 'text-red-500'}`}>
-              {netPositive ? '+' : ''}{inr(totals.netGain)}
+            <p className={`font-bold mono text-lg ${balancePositive ? 'text-emerald-600' : 'text-red-500'}`}>
+              {balancePositive ? '+' : ''}{inr(runningBalance)}
             </p>
-            <p className="text-[10px] text-gray-400">net P&L</p>
+            <p className="text-[10px] text-gray-400">running balance</p>
           </div>
-        </div>
-        <div className="grid grid-cols-4 gap-1 text-center border-t border-gray-50 pt-3">
-          <div>
-            <p className="text-xs font-bold mono text-gray-800">{inr(totals.committed)}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">Committed</p>
-          </div>
-          <div>
-            <p className="text-xs font-bold mono text-emerald-600">{inr(totals.paid)}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">Paid</p>
-          </div>
-          <div>
-            <p className={`text-xs font-bold mono ${owesProject ? 'text-amber-600' : projectOwes ? 'text-blue-600' : 'text-emerald-600'}`}>
-              {inr(Math.abs(totals.outstanding))}
-            </p>
-            <p className="text-[10px] text-gray-400 mt-0.5">
-              {owesProject ? 'Owes' : projectOwes ? 'Refund' : 'Settled'}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs font-bold mono text-emerald-600">{inr(totals.profit)}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">Profit</p>
-          </div>
-        </div>
-        <div className={`flex justify-between items-center mt-3 pt-3 border-t border-gray-50 ${availPositive ? 'text-emerald-700' : 'text-red-600'}`}>
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wide">Available</p>
-            <p className="text-[10px] text-gray-400">cash net of internal moves</p>
-          </div>
-          <p className="font-bold mono text-sm">{availPositive ? '+' : ''}{inr(available)}</p>
         </div>
       </button>
 
       {open && (
         <div className="px-4 pb-4 pt-1 space-y-3 bg-gray-50 border-t border-gray-100">
+          {/* Running Balance breakdown */}
+          <div className="pt-3 bg-white rounded-xl p-3 space-y-1 text-xs">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Running Balance breakdown</p>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Profit allocated</span>
+              <span className="font-mono font-semibold text-emerald-600">+{inr(totals.profit)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Expense share</span>
+              <span className="font-mono font-semibold text-red-500">-{inr(totals.expense_share)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Net cash (paid − refunds)</span>
+              <span className={`font-mono font-semibold ${totals.paid >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                {totals.paid >= 0 ? '+' : ''}{inr(totals.paid)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Loans I've given (outstanding)</span>
+              <span className="font-mono font-semibold text-blue-600">+{inr(totals.loansGiven ?? 0)}</span>
+            </div>
+            <div className="flex justify-between border-t border-gray-100 pt-1.5 mt-1">
+              <span className="font-semibold text-gray-700">= Running Balance</span>
+              <span className={`font-mono font-bold ${runningBalance >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                {runningBalance >= 0 ? '+' : ''}{inr(runningBalance)}
+              </span>
+            </div>
+            <p className="text-[10px] text-gray-400 mt-2 border-t border-gray-100 pt-2">
+              Committed stake across projects: {inr(totals.committed)} (not part of balance — represents stake, not cash)
+            </p>
+          </div>
+
           {/* Mini bar chart per project */}
           {chartData.length > 0 && (
-            <div className="pt-3">
+            <div className="pt-1">
               <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Paid + Profit per project</p>
               <div style={{ width: '100%', height: 140 }}>
                 <ResponsiveContainer width="100%" height="100%">
