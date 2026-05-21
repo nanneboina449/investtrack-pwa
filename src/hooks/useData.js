@@ -563,12 +563,16 @@ export function useAllInvestors() {
 // and computes their consolidated position across all projects.
 export function useAllInvestorsSummary() {
   return useFetch(async () => {
-    const [investorsRes, paymentsRes, distributionsRes, expensesRes, projectsRes] = await Promise.all([
+    const [investorsRes, paymentsRes, distributionsRes, expensesRes, projectsRes,
+           loanContribsRes, loanCashRes, repayDistRes] = await Promise.all([
       supabase.from('investors').select('id, project_id, name, share_percent, amount_invested'),
-      supabase.from('investor_payments').select('investor_id, amount, payment_type, source_project_id, destination_project_id'),
+      supabase.from('investor_payments').select('investor_id, amount, payment_type, source_project_id, source_investor_id, destination_project_id, destination_investor_id'),
       supabase.from('profit_distributions').select('investor_id, amount'),
       supabase.from('project_expenses').select('project_id, amount'),
       supabase.from('my_projects').select('id, name, status'),
+      supabase.from('loan_contributions').select('id, loan_id, investor_id, amount'),
+      supabase.from('cash_adjustments').select('id, amount, interest_rate_percent, is_settled, type, counterparty'),
+      supabase.from('repayment_distributions').select('loan_contribution_id, amount_returned'),
     ])
 
     if (investorsRes.error) throw investorsRes.error
@@ -609,6 +613,27 @@ export function useAllInvestorsSummary() {
     const projectMap = {}
     for (const p of (projectsRes.data ?? [])) projectMap[p.id] = p
 
+    // Loans I gave that are still outstanding (asset = receivable to me).
+    // For each loan_contribution, expected return = amount × (1 + interest%/100).
+    // Minus the portion already distributed back.
+    const loanCaById = {}
+    for (const ca of (loanCashRes.data ?? [])) loanCaById[ca.id] = ca
+    const repaidByContrib = {}
+    for (const rd of (repayDistRes.data ?? [])) {
+      repaidByContrib[rd.loan_contribution_id] =
+        (repaidByContrib[rd.loan_contribution_id] ?? 0) + Number(rd.amount_returned || 0)
+    }
+    const loansGivenByInv = {}
+    for (const lc of (loanContribsRes.data ?? [])) {
+      const loan = loanCaById[lc.loan_id]
+      if (!loan || loan.is_settled) continue
+      const interest = Number(loan.interest_rate_percent || 0)
+      const expected = Number(lc.amount || 0) * (1 + interest / 100)
+      const repaid   = repaidByContrib[lc.id] ?? 0
+      const outstanding = Math.max(0, expected - repaid)
+      loansGivenByInv[lc.investor_id] = (loansGivenByInv[lc.investor_id] ?? 0) + outstanding
+    }
+
     const byName = {}
     for (const inv of (investorsRes.data ?? [])) {
       const proj = projectMap[inv.project_id]
@@ -622,6 +647,7 @@ export function useAllInvestorsSummary() {
       const netGain       = profit - expense_share
       const cashIn        = cashInByInv[inv.id] ?? 0
       const cashBack      = cashBackByInv[inv.id] ?? 0
+      const loansGiven    = loansGivenByInv[inv.id] ?? 0
 
       // Normalize for grouping: lowercase, trim, collapse internal whitespace.
       // Display uses the first record's cleaned name.
@@ -636,7 +662,7 @@ export function useAllInvestorsSummary() {
         project_status: proj.status,
         share_percent: sharePct,
         committed, paid, profit, expense_share, outstanding, netGain,
-        cashIn, cashBack,
+        cashIn, cashBack, loansGiven,
       })
     }
 
@@ -650,11 +676,27 @@ export function useAllInvestorsSummary() {
         netGain:       a.netGain       + p.netGain,
         cashIn:        a.cashIn        + p.cashIn,
         cashBack:      a.cashBack      + p.cashBack,
-      }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, netGain:0, cashIn:0, cashBack:0 })
-      // "Available balance" = realized profits + external cash returned - external cash put in
-      //   Positive means the user is net positive in cash terms even before completed projects pay back.
-      //   Negative means they still have capital deployed beyond what they've earned back.
-      // Internal moves between their own projects don't change available — they net to zero.
+        loansGiven:    a.loansGiven    + p.loansGiven,
+      }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, netGain:0, cashIn:0, cashBack:0, loansGiven:0 })
+      // Running Balance — the single net position number the user
+      // wants. Captures realized P&L, net cash flow, AND outstanding
+      // loans-given as a receivable asset:
+      //
+      //   running_balance = profit              (income earned)
+      //                   − expense_share       (cost absorbed)
+      //                   + paid_net            (net cash settled)
+      //                   + loans_given_outstanding  (receivables — money I'm owed back)
+      //
+      // Note: paid_net already nets inter-investor moves correctly
+      // (a refund on me has no offsetting top_up on me when I'm
+      // lending to a different person). Loans-given outstanding then
+      // adds back the asset value so a lender doesn't look "down"
+      // just because the loan hasn't been repaid yet.
+      totals.runningBalance =
+        totals.profit
+        - totals.expense_share
+        + totals.paid
+        + totals.loansGiven
       totals.available = totals.profit + totals.cashBack - totals.cashIn
 
       // Group projects by status so the donut can show active vs completed allocation
