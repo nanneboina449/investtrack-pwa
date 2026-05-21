@@ -27,10 +27,10 @@ export default function Dashboard() {
   return (
     <div className="page-enter">
       {/* Portfolio banner */}
-      <div className="bg-brand-900 text-white px-5 pt-14 pb-8">
+      <div className="bg-brand-900 text-white px-5 lg:px-8 pt-14 lg:pt-8 pb-8">
         <p className="text-brand-100 text-sm mb-1">Total Portfolio Value</p>
-        <p className="text-4xl font-bold mono mb-6">{inr(summary.totalValue)}</p>
-        <div className="grid grid-cols-3 gap-3">
+        <p className="text-4xl lg:text-5xl font-bold mono mb-6">{inr(summary.totalValue)}</p>
+        <div className="grid grid-cols-3 gap-3 lg:max-w-2xl">
           <div className="bg-white/10 rounded-2xl p-3 text-center">
             <p className="text-brand-100 text-xs mb-1">Invested</p>
             <p className="font-bold mono text-sm">{inr(summary.totalInvested)}</p>
@@ -51,12 +51,12 @@ export default function Dashboard() {
       {/* Pending invites */}
       <InviteBanner />
 
-      <div className="px-4 py-5 space-y-6">
+      <div className="px-4 lg:px-8 py-5 space-y-6">
         {loading ? (
           <div className="flex justify-center py-10"><Spinner size="lg" /></div>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <StatCard icon="🚀" label="Active Projects"  value={summary.activeProjects}   color="green" />
               <StatCard icon="⏳" label="Upcoming"         value={summary.upcomingProjects} color="blue" />
               <StatCard icon="↗"  label="Loans Given"      value={inr(summary.loansGiven)}   color="orange" />
@@ -111,7 +111,7 @@ export default function Dashboard() {
                   <h2 className="font-bold text-gray-900">Active Projects</h2>
                   <button onClick={() => navigate('/projects')} className="text-xs text-brand-900 font-medium">View all →</button>
                 </div>
-                <div className="space-y-3">
+                <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
                   {active.map(p => <ProjectCard key={p.id} project={p} />)}
                 </div>
               </section>
@@ -120,7 +120,7 @@ export default function Dashboard() {
             {upcoming.length > 0 && (
               <section>
                 <h2 className="font-bold text-gray-900 mb-3">Upcoming Projects</h2>
-                <div className="space-y-3">
+                <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
                   {upcoming.map(p => <ProjectCard key={p.id} project={p} />)}
                 </div>
               </section>
