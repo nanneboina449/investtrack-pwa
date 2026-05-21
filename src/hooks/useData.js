@@ -373,7 +373,7 @@ export function useAllInvestorsSummary() {
   return useFetch(async () => {
     const [investorsRes, paymentsRes, distributionsRes, expensesRes, projectsRes] = await Promise.all([
       supabase.from('investors').select('id, project_id, name, share_percent, amount_invested'),
-      supabase.from('investor_payments').select('investor_id, amount, payment_type'),
+      supabase.from('investor_payments').select('investor_id, amount, payment_type, source_project_id, destination_project_id'),
       supabase.from('profit_distributions').select('investor_id, amount'),
       supabase.from('project_expenses').select('project_id, amount'),
       supabase.from('my_projects').select('id, name, status'),
@@ -382,9 +382,29 @@ export function useAllInvestorsSummary() {
     if (investorsRes.error) throw investorsRes.error
 
     const paymentByInv = {}
+    // External cash flow per investor: cash that genuinely left the
+    // user's wallet OR came back externally (refunds without a
+    // destination project). Internal moves (top_up with source / refund
+    // with destination) cancel out across projects so they don't
+    // change the user's true cash position.
+    const cashInByInv      = {} // money out of wallet into projects (non-internal top-ups + share_contributions + expense_paid)
+    const cashBackByInv    = {} // money returned externally (refund without destination)
     for (const p of (paymentsRes.data ?? [])) {
+      const amt = Number(p.amount || 0)
       const sign = p.payment_type === 'refund' ? -1 : 1
-      paymentByInv[p.investor_id] = (paymentByInv[p.investor_id] ?? 0) + sign * Number(p.amount || 0)
+      paymentByInv[p.investor_id] = (paymentByInv[p.investor_id] ?? 0) + sign * amt
+      if (p.payment_type === 'refund') {
+        // External cash back only when there's no destination project
+        if (!p.destination_project_id) {
+          cashBackByInv[p.investor_id] = (cashBackByInv[p.investor_id] ?? 0) + amt
+        }
+      } else {
+        // top_up with source → reallocation, not new cash in
+        const isInternalMove = p.payment_type === 'top_up' && !!p.source_project_id
+        if (!isInternalMove) {
+          cashInByInv[p.investor_id] = (cashInByInv[p.investor_id] ?? 0) + amt
+        }
+      }
     }
     const profitByInv = {}
     for (const d of (distributionsRes.data ?? [])) {
@@ -408,6 +428,8 @@ export function useAllInvestorsSummary() {
       const expense_share = ((expenseByProject[inv.project_id] ?? 0) * sharePct) / 100
       const outstanding   = committed + expense_share - paid
       const netGain       = profit - expense_share
+      const cashIn        = cashInByInv[inv.id] ?? 0
+      const cashBack      = cashBackByInv[inv.id] ?? 0
 
       if (!byName[inv.name]) byName[inv.name] = { name: inv.name, projects: [] }
       byName[inv.name].projects.push({
@@ -417,6 +439,7 @@ export function useAllInvestorsSummary() {
         project_status: proj.status,
         share_percent: sharePct,
         committed, paid, profit, expense_share, outstanding, netGain,
+        cashIn, cashBack,
       })
     }
 
@@ -428,8 +451,22 @@ export function useAllInvestorsSummary() {
         expense_share: a.expense_share + p.expense_share,
         outstanding:   a.outstanding   + p.outstanding,
         netGain:       a.netGain       + p.netGain,
-      }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, netGain:0 })
-      return { ...g, totals, projectCount: g.projects.length }
+        cashIn:        a.cashIn        + p.cashIn,
+        cashBack:      a.cashBack      + p.cashBack,
+      }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, netGain:0, cashIn:0, cashBack:0 })
+      // "Available balance" = realized profits + external cash returned - external cash put in
+      //   Positive means the user is net positive in cash terms even before completed projects pay back.
+      //   Negative means they still have capital deployed beyond what they've earned back.
+      // Internal moves between their own projects don't change available — they net to zero.
+      totals.available = totals.profit + totals.cashBack - totals.cashIn
+
+      // Group projects by status so the donut can show active vs completed allocation
+      const allocByStatus = g.projects.reduce((acc, p) => {
+        const key = p.project_status || 'other'
+        acc[key] = (acc[key] ?? 0) + p.paid
+        return acc
+      }, {})
+      return { ...g, totals, allocByStatus, projectCount: g.projects.length }
     }).sort((a, b) => b.totals.committed - a.totals.committed)
   })
 }
