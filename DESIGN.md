@@ -298,12 +298,20 @@ Mutations: `createProject`, `updateProject`, `deleteProject`, `createInvestor`, 
 - ✅ **`my_investments` view drift on custom splits** — view rewritten with a CTE that pulls `profit_distributions` and the actual ledger.
 - ✅ **`my_investments` view definition** — now committed in the consolidated setup (sections 11d).
 
+### Resolved by the May 2026 Master Audit (sections 11, this file's commit + `audit_master_fixes.sql`)
+
+- ✅ **Audit 2.1 — Name-string matching in RPC**: `reallocate_investor_position` now takes an optional `p_dest_investor_id` UUID. The UI looks up the destination investor in the (already filtered) destination project dropdown and passes the UUID; name matching is fallback only.
+- ✅ **Audit 2.2 — Auto-scale trigger silently overwrites commitments**: The `projects_scale_investor_commitments` trigger is dropped. Scaling is now an explicit checkbox in EditProjectSheet (default ON), executing a batch `updateInvestor` after the project update — so the user actively confirms.
+
 ### Still open
 
+- **Audit 2.3 — Hard delete cascades on investors / cash adjustments**. Deleting an investor still wipes their entire ledger history through FK CASCADE. For compliance-grade audit trails the right move is soft delete (`deleted_at` column + filter in every view). Documented as a future schema migration.
+- **`cash_adjustment_id` FK is ON DELETE CASCADE, not RESTRICT** (the Master Audit recommended RESTRICT). Kept as CASCADE intentionally so the existing "Delete loan" UX works one-click — the loan + its paired ledger rows clean up atomically. Switch to RESTRICT if you want to force manual cleanup of dependent rows first; documented as a design choice.
 - **No explicit Wallet table**. Wallet balance is currently derived (refunds-without-destination minus implied next contribution). For thousands of rows per investor this becomes a frontend bottleneck. Recommended: an `investor_wallets` table that INSERTS on external refund and DEBITs on next deployment.
 - **No explicit "exit investor" flow**. To exit cleanly today you record a refund + delete the investor. A dedicated "Exit Investor" sheet would do this atomically with a settlement preview.
 - **Project status = completed is soft-close**. Books stay editable unless the `tr_lock_completed_project_payments` trigger is enabled (commented out in section 11e — uncomment to switch on). A "Close & Settle" UI flow that refunds outstanding positions and freezes the project is the next layer up.
 - **`investor_profit_summary` / `investor_running_balance` views** still can't be cleanly replaced via `CREATE OR REPLACE VIEW` due to dependent-view column-type lock. Worked around by reading `profit_distributions` directly in the frontend for custom-split-aware totals. The audit's recommendation — migrate aggregations to inline TVFs or materialized views with explicit refresh triggers — is a future cleanup.
+- **`process_loan_repayment` still uses name matching** when type=project_adjustment (to find contributor's counterpart on the destination project). Master Audit 2.1's recommendation to use UUID is partially addressed via `reallocate_investor_position`; doing the same for `process_loan_repayment` would require passing a per-contributor destination map.
 
 ---
 

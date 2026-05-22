@@ -1339,9 +1339,16 @@ function MoveInvestorPositionSheet({ investor, projects = [], currentProjectId, 
     if (!amount || parseFloat(amount) <= 0) { setError('Amount must be positive'); return }
     setSaving(true); setError(null)
     try {
+      // Audit 2.1: pass the destination investor's UUID so the RPC doesn't
+      // have to rely on name matching. The dropdown is already filtered to
+      // valid destinations so we can look up the UUID locally.
+      const destInv = (allInvestorsHook.data ?? []).find(i =>
+        i.project_id === destProjectId && sourceNameKey === normalize(i.name)
+      )
       await reallocateInvestorPosition({
         sourceInvestorId: investor.investor_id,
         destProjectId,
+        destInvestorId:   destInv?.id ?? null,  // RPC falls back to name match if null
         amount: parseFloat(amount),
         date,
         notes: notes || null,
@@ -1817,9 +1824,18 @@ function EditProjectSheet({ open, onClose, project, onSaved }) {
     our_stake_percent: project?.our_stake_percent ?? 100,
     status:            project?.status            ?? 'active',
   })
+  // Audit 2.2: scaling is now opt-in. The trigger has been dropped at the
+  // DB level so silent overwrites can't happen. If the user wants
+  // commitments to follow the new pool, this checkbox kicks in a frontend
+  // batch update of each investor's amount_invested.
+  const [scaleInvestors, setScaleInvestors] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const oldPool = (project?.total_value ?? 0) * (project?.our_stake_percent ?? 100) / 100
+  const newPool = (parseFloat(form.total_value) || 0) * (parseFloat(form.our_stake_percent) || 100) / 100
+  const poolChanged = Math.abs(newPool - oldPool) >= 0.5
 
   const submit = async () => {
     setSaving(true); setError(null)
@@ -1831,6 +1847,17 @@ function EditProjectSheet({ open, onClose, project, onSaved }) {
         our_stake_percent: parseFloat(form.our_stake_percent),
         status:            form.status,
       })
+      // Explicit scaling — only if pool actually shifted AND user opted in.
+      if (poolChanged && scaleInvestors && oldPool > 0) {
+        const ratio = newPool / oldPool
+        const { data: invs, error: invErr } = await supabase
+          .from('investors').select('id, amount_invested').eq('project_id', project.id)
+        if (invErr) throw invErr
+        for (const inv of (invs ?? [])) {
+          const newAmt = Math.round(Number(inv.amount_invested || 0) * ratio * 100) / 100
+          await updateInvestor(inv.id, { amount_invested: newAmt })
+        }
+      }
       onSaved()
     } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
@@ -1863,23 +1890,29 @@ function EditProjectSheet({ open, onClose, project, onSaved }) {
               onChange={e => set('our_stake_percent', e.target.value)} />
           </Field>
         </div>
-        {(() => {
-          const oldPool = (project?.total_value ?? 0) * (project?.our_stake_percent ?? 100) / 100
-          const newPool = (parseFloat(form.total_value) || 0) * (parseFloat(form.our_stake_percent) || 100) / 100
-          if (Math.abs(newPool - oldPool) < 0.5) return null
-          const delta = newPool - oldPool
-          return (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs space-y-1">
-              <p className="text-amber-800 font-semibold">
-                Investor commitments will scale {delta > 0 ? 'up' : 'down'} proportionally
-              </p>
-              <p className="text-amber-700">
-                Pool changes from {inr(oldPool)} to {inr(newPool)} ({delta > 0 ? '+' : ''}{inr(delta)}).
-                Every investor&apos;s committed amount is multiplied by {(newPool / oldPool).toFixed(3)}× to keep their share %.
-              </p>
-            </div>
-          )
-        })()}
+        {poolChanged && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs space-y-2">
+            <p className="text-amber-800 font-semibold">
+              Pool is changing from {inr(oldPool)} to {inr(newPool)} ({newPool > oldPool ? '+' : ''}{inr(newPool - oldPool)}).
+            </p>
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input type="checkbox" checked={scaleInvestors}
+                onChange={e => setScaleInvestors(e.target.checked)}
+                className="mt-0.5" />
+              <span className="text-amber-700">
+                Scale every investor&apos;s committed amount by {(newPool / oldPool).toFixed(3)}×
+                so their share % stays consistent.
+                {!scaleInvestors && (
+                  <span className="block text-amber-600 mt-1">
+                    Unchecked: existing commitments stay as-is. Investors who fully paid will now
+                    show as overpaid; new commitments may go to "Owes". Use when only renaming /
+                    re-categorizing the project.
+                  </span>
+                )}
+              </span>
+            </label>
+          </div>
+        )}
         <Field label="Status">
           <select className="input" value={form.status} onChange={e => set('status', e.target.value)}>
             <option value="upcoming">Upcoming</option>
