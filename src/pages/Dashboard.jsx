@@ -225,10 +225,11 @@ function InvestorRunningTotals({ groups }) {
     expense_share:   a.expense_share   + g.totals.expense_share,
     outstanding:     a.outstanding     + g.totals.outstanding,
     loansGiven:      a.loansGiven      + (g.totals.loansGiven ?? 0),
+    loansReceived:   a.loansReceived   + (g.totals.loansReceived ?? 0),
     runningBalance:  a.runningBalance  + (g.totals.runningBalance ?? 0),
     cashContributed: a.cashContributed + (g.totals.cashContributed ?? 0),
     walletDeposits:  a.walletDeposits  + (g.totals.walletDeposits ?? 0),
-  }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, loansGiven:0, runningBalance:0, cashContributed:0, walletDeposits:0 })
+  }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, loansGiven:0, loansReceived:0, runningBalance:0, cashContributed:0, walletDeposits:0 })
 
   return (
     <section>
@@ -242,7 +243,7 @@ function InvestorRunningTotals({ groups }) {
         <div className="flex justify-between items-center">
           <div>
             <p className="text-[11px] uppercase tracking-wide text-brand-500 font-semibold">Total Running Balance</p>
-            <p className="text-[10px] text-brand-400 mt-0.5">profit − expenses + net cash + outstanding loans owed back</p>
+            <p className="text-[10px] text-brand-400 mt-0.5">profit − expenses + net cash + loans owed to me − loans I owe</p>
           </div>
           <p className={`font-bold mono text-2xl ${totals.runningBalance >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
             {totals.runningBalance >= 0 ? '+' : ''}{inr(totals.runningBalance)}
@@ -335,8 +336,12 @@ function InvestorRow({ group }) {
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-500">Loans I've given (outstanding)</span>
+              <span className="text-gray-500">Loans I&apos;ve given (outstanding)</span>
               <span className="font-mono font-semibold text-blue-600">+{inr(totals.loansGiven ?? 0)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Loans I&apos;ve received (outstanding)</span>
+              <span className="font-mono font-semibold text-red-500">-{inr(totals.loansReceived ?? 0)}</span>
             </div>
             <div className="flex justify-between border-t border-gray-100 pt-1.5 mt-1">
               <span className="font-semibold text-gray-700">= Running Balance</span>

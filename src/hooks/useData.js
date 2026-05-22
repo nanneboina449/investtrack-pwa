@@ -293,42 +293,11 @@ export async function updateCashAdjustment(id, values) {
 }
 
 export async function deleteCashAdjustment(id) {
-  // Pre-fetch loan metadata so we can clean up the inter-investor linked
-  // investor_payments rows (refund on lender + top_up on borrower) that
-  // were created by transfer_funds_as_loan. cash_adjustments has no FK
-  // to investor_payments, so we match by amount + date + the source/
-  // destination investor ids on the contribution side.
-  const { data: ca } = await supabase
-    .from('cash_adjustments')
-    .select('id, type, amount, adjustment_date, from_project_id, counterparty')
-    .eq('id', id).single()
-
-  if (ca?.type === 'loan_given') {
-    const { data: contribs } = await supabase
-      .from('loan_contributions')
-      .select('investor_id, amount')
-      .eq('loan_id', id)
-
-    for (const c of (contribs ?? [])) {
-      // Best-effort delete of paired inter-investor payment rows:
-      // - refund on the contributor (lender) with matching amount + date
-      // - top_up on the borrower (we don't know their investor_id here
-      //   directly, so match by source_investor_id = lender + amount + date)
-      await supabase.from('investor_payments').delete()
-        .eq('investor_id',      c.investor_id)
-        .eq('payment_type',     'refund')
-        .eq('amount',           c.amount)
-        .eq('payment_date',     ca.adjustment_date)
-        .not('destination_investor_id', 'is', null)
-      await supabase.from('investor_payments').delete()
-        .eq('source_investor_id', c.investor_id)
-        .eq('payment_type',       'top_up')
-        .eq('amount',             c.amount)
-        .eq('payment_date',       ca.adjustment_date)
-    }
-  }
-
-  // Cascade handles loan_contributions and loan_repayments via FK
+  // Audit BUG 2 fix: investor_payments now carries cash_adjustment_id
+  // with ON DELETE CASCADE. We just delete the cash_adjustment and
+  // Postgres cleans up every linked payment row atomically — no more
+  // best-effort matching by amount+date+contributor.
+  // (loan_contributions and loan_repayments also cascade via their FKs.)
   const { error } = await supabase.from('cash_adjustments').delete().eq('id', id)
   if (error) throw error
 }
@@ -703,15 +672,16 @@ export function useAllInvestors() {
 export function useAllInvestorsSummary() {
   return useFetch(async () => {
     const [investorsRes, paymentsRes, distributionsRes, expensesRes, projectsRes,
-           loanContribsRes, loanCashRes, repayDistRes] = await Promise.all([
+           loanContribsRes, loanCashRes, repayDistRes, loanRepayRes] = await Promise.all([
       supabase.from('investors').select('id, project_id, name, share_percent, amount_invested'),
-      supabase.from('investor_payments').select('investor_id, amount, payment_type, source_project_id, source_investor_id, destination_project_id, destination_investor_id'),
+      supabase.from('investor_payments').select('investor_id, amount, payment_type, source_project_id, source_investor_id, destination_project_id, destination_investor_id, cash_adjustment_id'),
       supabase.from('profit_distributions').select('investor_id, amount'),
       supabase.from('project_expenses').select('project_id, amount'),
       supabase.from('my_projects').select('id, name, status'),
       supabase.from('loan_contributions').select('id, loan_id, investor_id, amount'),
       supabase.from('cash_adjustments').select('id, amount, interest_rate_percent, is_settled, type, counterparty'),
       supabase.from('repayment_distributions').select('loan_contribution_id, amount_returned'),
+      supabase.from('loan_repayments').select('loan_id, amount'),
     ])
 
     if (investorsRes.error) throw investorsRes.error
@@ -773,6 +743,31 @@ export function useAllInvestorsSummary() {
       loansGivenByInv[lc.investor_id] = (loansGivenByInv[lc.investor_id] ?? 0) + outstanding
     }
 
+    // Audit BUG 3 fix: loans I RECEIVED still outstanding (payable).
+    // For each top_up payment linked to a cash_adjustment_id where the
+    // loan isn't settled, the borrower owes the principal + interest
+    // share back. Subtract from their running balance.
+    const repaidByLoan = {}
+    for (const lr of (loanRepayRes.data ?? [])) {
+      repaidByLoan[lr.loan_id] = (repaidByLoan[lr.loan_id] ?? 0) + Number(lr.amount || 0)
+    }
+    const loansReceivedByInv = {}
+    for (const p of (paymentsRes.data ?? [])) {
+      if (p.payment_type !== 'top_up' || !p.cash_adjustment_id) continue
+      const loan = loanCaById[p.cash_adjustment_id]
+      if (!loan || loan.is_settled) continue
+      const interest = Number(loan.interest_rate_percent || 0)
+      const expectedBack = Number(p.amount || 0) * (1 + interest / 100)
+      // Approximate: borrower's share of repayments. Since this borrower
+      // borrowed amount p.amount out of total contributions = loan.amount,
+      // their portion of any repayment is (p.amount / loan.amount) × repaid.
+      const totalLoan = Number(loan.amount || 0)
+      const totalRepaid = repaidByLoan[p.cash_adjustment_id] ?? 0
+      const borrowerShareRepaid = totalLoan > 0 ? (Number(p.amount) / totalLoan) * totalRepaid : 0
+      const outstanding = Math.max(0, expectedBack - borrowerShareRepaid)
+      loansReceivedByInv[p.investor_id] = (loansReceivedByInv[p.investor_id] ?? 0) + outstanding
+    }
+
     const byName = {}
     for (const inv of (investorsRes.data ?? [])) {
       const proj = projectMap[inv.project_id]
@@ -787,6 +782,7 @@ export function useAllInvestorsSummary() {
       const cashIn        = cashInByInv[inv.id] ?? 0
       const cashBack      = cashBackByInv[inv.id] ?? 0
       const loansGiven    = loansGivenByInv[inv.id] ?? 0
+      const loansReceived = loansReceivedByInv[inv.id] ?? 0
       // Total out-of-pocket cash this person contributed via this investor
       // record — share_contributions + top_ups without source + expense_paid.
       // Internal moves (top_up with source) are NOT counted because that
@@ -818,7 +814,7 @@ export function useAllInvestorsSummary() {
         project_status: proj.status,
         share_percent: sharePct,
         committed, paid, profit, expense_share, outstanding, netGain,
-        cashIn, cashBack, loansGiven,
+        cashIn, cashBack, loansGiven, loansReceived,
         cashContributed, walletDeposits,
       })
     }
@@ -834,9 +830,10 @@ export function useAllInvestorsSummary() {
         cashIn:           a.cashIn           + p.cashIn,
         cashBack:         a.cashBack         + p.cashBack,
         loansGiven:       a.loansGiven       + p.loansGiven,
+        loansReceived:    a.loansReceived    + (p.loansReceived ?? 0),
         cashContributed:  a.cashContributed  + (p.cashContributed ?? 0),
         walletDeposits:   a.walletDeposits   + (p.walletDeposits ?? 0),
-      }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, netGain:0, cashIn:0, cashBack:0, loansGiven:0, cashContributed:0, walletDeposits:0 })
+      }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, netGain:0, cashIn:0, cashBack:0, loansGiven:0, loansReceived:0, cashContributed:0, walletDeposits:0 })
       // Running Balance — the single net position number the user
       // wants. Captures realized P&L, net cash flow, AND outstanding
       // loans-given as a receivable asset:
@@ -851,11 +848,16 @@ export function useAllInvestorsSummary() {
       // lending to a different person). Loans-given outstanding then
       // adds back the asset value so a lender doesn't look "down"
       // just because the loan hasn't been repaid yet.
+      // Running Balance (audit BUG 3 fix included): subtract outstanding
+      // loans the user RECEIVED so borrowed cash doesn't inflate their
+      // portfolio. The borrowed amount sits in paid_net (positive top_up)
+      // but they owe it back, so loansReceived offsets it.
       totals.runningBalance =
         totals.profit
         - totals.expense_share
         + totals.paid
         + totals.loansGiven
+        - totals.loansReceived
       totals.available = totals.profit + totals.cashBack - totals.cashIn
 
       // Group projects by status so the donut can show active vs completed allocation
