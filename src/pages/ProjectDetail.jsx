@@ -193,12 +193,29 @@ export default function ProjectDetail() {
             ) : (
               investors.data.map(inv => {
                 const invPayments = payments.data.filter(p => p.investor_id === inv.investor_id)
-                const paid = invPayments.reduce(
-                  (s, p) => s + (p.payment_type === 'refund' ? -p.amount : p.amount), 0
-                )
+                // PROJECT-LEVEL paid: cumulative cash contributions to THIS
+                // project. Internal extractions (reallocations to another
+                // project / lending to another investor) are tracked under
+                // "Extracted" and on the Dashboard running balance — they
+                // don't reduce the project-level Paid because the original
+                // contribution is a historical fact.
+                //
+                //   + share_contribution / top_up / expense_paid           → adds
+                //   − refund WITHOUT destination (project really paid back) → subtracts
+                //   = refund WITH destination (move / lend)                → IGNORED at project level
+                const paid = invPayments.reduce((s, p) => {
+                  if (p.payment_type === 'refund') {
+                    return (p.destination_project_id || p.destination_investor_id)
+                      ? s
+                      : s - Number(p.amount || 0)
+                  }
+                  return s + Number(p.amount || 0)
+                }, 0)
+                const extracted = invPayments
+                  .filter(p => p.payment_type === 'refund' && (p.destination_project_id || p.destination_investor_id))
+                  .reduce((s, p) => s + Number(p.amount || 0), 0)
+
                 // Profit MUST come from profit_distributions (respects custom splits).
-                // Only fall back to the view if migration hasn't been run AND there
-                // are no distribution rows at all in the project.
                 const invDists = distributions.data.filter(d => d.investor_id === inv.investor_id)
                 const ledgerActive = distributions.data.length > 0 || profits.data.length === 0
                 const profit = ledgerActive
@@ -206,15 +223,11 @@ export default function ProjectDetail() {
                   : (inv.total_profit_allocated ?? 0)
                 const committed   = inv.amount_invested ?? 0
                 const expShare    = inv.total_expenses_allocated ?? 0
-                // Clamp paid at 0 for the Owes calc — negative paid means the
-                // investor lent money to someone else or pulled it out, which
-                // is tracked under "Loaned out" separately, NOT added to Owes.
-                const paidForOwes  = Math.max(paid, 0)
-                const loanedOut    = paid < 0 ? -paid : 0
-                const outstanding  = committed + expShare - paidForOwes
-                const owesProject  = outstanding > 0.5
-                const projectOwes  = outstanding < -0.5
-                const roi          = committed > 0 ? (profit / committed) * 100 : 0
+                const outstanding = committed + expShare - paid
+                const owesProject = outstanding > 0.5
+                const projectOwes = outstanding < -0.5
+                const loanedOut   = extracted
+                const roi         = committed > 0 ? (profit / committed) * 100 : 0
                 return (
                   <div key={inv.investor_id} className="card p-4">
                     <div className="flex justify-between items-start mb-3">
