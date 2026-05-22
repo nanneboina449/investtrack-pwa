@@ -144,10 +144,11 @@ begin
 end;
 $$;
 
+-- Trigger DEPRECATED per Master Audit 2.2. The scaling function remains
+-- defined so older deployments don't error, but the trigger binding is
+-- dropped. Scaling now happens via an explicit checkbox in EditProjectSheet
+-- so investors aren't silently flipped to "Owes" by a revaluation.
 drop trigger if exists projects_scale_investor_commitments on projects;
-create trigger projects_scale_investor_commitments
-  after update of total_value, our_stake_percent on projects
-  for each row execute function scale_investor_commitments_on_project_change();
 
 -- ============================================================
 -- 4c. TRIGGER: keep denormalized investor_name fields in sync
@@ -555,13 +556,18 @@ grant execute on function create_profit_record(uuid, numeric, date, text, json)
 
 -- ============================================================
 -- 11. RPC: reallocate_investor_position — atomic linked refund + top_up
+-- Audit 2.1: prefer immutable investor_id; name match is fallback only.
 -- ============================================================
+-- Drop the old signature first so the new one with extra param takes over cleanly
+drop function if exists reallocate_investor_position(uuid, uuid, numeric, date, text);
+
 create or replace function reallocate_investor_position(
   p_source_investor_id   uuid,
   p_dest_project_id      uuid,
   p_amount               numeric,
   p_date                 date default current_date,
-  p_notes                text default null
+  p_notes                text default null,
+  p_dest_investor_id     uuid default null
 ) returns uuid
 language plpgsql
 security definer
@@ -576,28 +582,27 @@ declare
 begin
   select project_id, name into v_source_project_id, v_source_name
   from investors where id = p_source_investor_id;
-
-  if v_source_project_id is null then
-    raise exception 'Source investor not found';
-  end if;
-
+  if v_source_project_id is null then raise exception 'Source investor not found'; end if;
   if v_source_project_id = p_dest_project_id then
     raise exception 'Source and destination projects must be different';
   end if;
+  if p_amount <= 0 then raise exception 'Amount must be positive'; end if;
 
-  if p_amount <= 0 then
-    raise exception 'Amount must be positive';
-  end if;
-
-  select id into v_dest_investor_id
-  from investors
-  where project_id = p_dest_project_id
-    and lower(regexp_replace(trim(name), '\s+', ' ', 'g'))
-        = lower(regexp_replace(trim(v_source_name), '\s+', ' ', 'g'))
-  limit 1;
-
-  if v_dest_investor_id is null then
-    raise exception 'No investor named "%" on the destination project (matched case + spacing insensitively). Add them there first.', v_source_name;
+  if p_dest_investor_id is not null then
+    if not exists (select 1 from investors where id = p_dest_investor_id and project_id = p_dest_project_id) then
+      raise exception 'Destination investor not found on destination project';
+    end if;
+    v_dest_investor_id := p_dest_investor_id;
+  else
+    select id into v_dest_investor_id
+    from investors
+    where project_id = p_dest_project_id
+      and lower(regexp_replace(trim(name), '\s+', ' ', 'g'))
+          = lower(regexp_replace(trim(v_source_name), '\s+', ' ', 'g'))
+    limit 1;
+    if v_dest_investor_id is null then
+      raise exception 'No investor named "%" on the destination project. Add them there first or pass p_dest_investor_id.', v_source_name;
+    end if;
   end if;
 
   insert into investor_payments
@@ -622,7 +627,7 @@ begin
 end;
 $$;
 
-grant execute on function reallocate_investor_position(uuid, uuid, numeric, date, text)
+grant execute on function reallocate_investor_position(uuid, uuid, numeric, date, text, uuid)
   to authenticated, service_role;
 
 -- ============================================================

@@ -530,13 +530,14 @@ export async function updateMove({ refundId, amount, notes, date }) {
   }
 }
 
-export async function reallocateInvestorPosition({ sourceInvestorId, destProjectId, amount, date, notes }) {
+export async function reallocateInvestorPosition({ sourceInvestorId, destProjectId, destInvestorId, amount, date, notes }) {
   const { data, error } = await supabase.rpc('reallocate_investor_position', {
     p_source_investor_id: sourceInvestorId,
     p_dest_project_id:    destProjectId,
     p_amount:             amount,
     p_date:               isoDate(date),
     p_notes:              notes ?? null,
+    p_dest_investor_id:   destInvestorId ?? null,
   })
   if (error) throw error
   return data
