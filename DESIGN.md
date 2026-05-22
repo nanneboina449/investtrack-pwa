@@ -1,5 +1,9 @@
 # InvestTrack — Design & Implementation Guide
 
+> Companion: see [`CALCULATIONS.md`](./CALCULATIONS.md) for every formula in
+> the system with definitions and worked examples.
+
+
 A multi-investor, multi-project portfolio tracker. This document describes the
 data model, the calculation rules, the UI surfaces, and the migration history
 of every feature shipped so far.
