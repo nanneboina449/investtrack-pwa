@@ -787,6 +787,23 @@ export function useAllInvestorsSummary() {
       const cashIn        = cashInByInv[inv.id] ?? 0
       const cashBack      = cashBackByInv[inv.id] ?? 0
       const loansGiven    = loansGivenByInv[inv.id] ?? 0
+      // Total out-of-pocket cash this person contributed via this investor
+      // record — share_contributions + top_ups without source + expense_paid.
+      // Internal moves (top_up with source) are NOT counted because that
+      // money was already contributed elsewhere.
+      const cashContributed = (paymentsRes.data ?? [])
+        .filter(p => p.investor_id === inv.id
+          && p.payment_type !== 'refund'
+          && !(p.payment_type === 'top_up' && p.source_project_id))
+        .reduce((s, p) => s + Number(p.amount || 0), 0)
+      // Wallet balance — external refunds received (no destination set) MINUS
+      // external cash deployed back via fresh contributions. Positive means
+      // they have cash on hand that hasn't been redeployed to a project.
+      const walletDeposits = (paymentsRes.data ?? [])
+        .filter(p => p.investor_id === inv.id
+          && p.payment_type === 'refund'
+          && !p.destination_project_id && !p.destination_investor_id)
+        .reduce((s, p) => s + Number(p.amount || 0), 0)
 
       // Normalize for grouping: lowercase, trim, collapse internal whitespace.
       // Display uses the first record's cleaned name.
@@ -802,21 +819,24 @@ export function useAllInvestorsSummary() {
         share_percent: sharePct,
         committed, paid, profit, expense_share, outstanding, netGain,
         cashIn, cashBack, loansGiven,
+        cashContributed, walletDeposits,
       })
     }
 
     return Object.values(byName).map(g => {
       const totals = g.projects.reduce((a, p) => ({
-        committed:     a.committed     + p.committed,
-        paid:          a.paid          + p.paid,
-        profit:        a.profit        + p.profit,
-        expense_share: a.expense_share + p.expense_share,
-        outstanding:   a.outstanding   + p.outstanding,
-        netGain:       a.netGain       + p.netGain,
-        cashIn:        a.cashIn        + p.cashIn,
-        cashBack:      a.cashBack      + p.cashBack,
-        loansGiven:    a.loansGiven    + p.loansGiven,
-      }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, netGain:0, cashIn:0, cashBack:0, loansGiven:0 })
+        committed:        a.committed        + p.committed,
+        paid:             a.paid             + p.paid,
+        profit:           a.profit           + p.profit,
+        expense_share:    a.expense_share    + p.expense_share,
+        outstanding:      a.outstanding      + p.outstanding,
+        netGain:          a.netGain          + p.netGain,
+        cashIn:           a.cashIn           + p.cashIn,
+        cashBack:         a.cashBack         + p.cashBack,
+        loansGiven:       a.loansGiven       + p.loansGiven,
+        cashContributed:  a.cashContributed  + (p.cashContributed ?? 0),
+        walletDeposits:   a.walletDeposits   + (p.walletDeposits ?? 0),
+      }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, netGain:0, cashIn:0, cashBack:0, loansGiven:0, cashContributed:0, walletDeposits:0 })
       // Running Balance — the single net position number the user
       // wants. Captures realized P&L, net cash flow, AND outstanding
       // loans-given as a receivable asset:

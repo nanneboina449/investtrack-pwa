@@ -219,14 +219,16 @@ function PortfolioDonut({ projects }) {
 // ── Investor running totals (cross-project) ──────────────────
 function InvestorRunningTotals({ groups }) {
   const totals = groups.reduce((a, g) => ({
-    committed:      a.committed      + g.totals.committed,
-    paid:           a.paid           + g.totals.paid,
-    profit:         a.profit         + g.totals.profit,
-    expense_share:  a.expense_share  + g.totals.expense_share,
-    outstanding:    a.outstanding    + g.totals.outstanding,
-    loansGiven:     a.loansGiven     + (g.totals.loansGiven ?? 0),
-    runningBalance: a.runningBalance + (g.totals.runningBalance ?? 0),
-  }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, loansGiven:0, runningBalance:0 })
+    committed:       a.committed       + g.totals.committed,
+    paid:            a.paid            + g.totals.paid,
+    profit:          a.profit          + g.totals.profit,
+    expense_share:   a.expense_share   + g.totals.expense_share,
+    outstanding:     a.outstanding     + g.totals.outstanding,
+    loansGiven:      a.loansGiven      + (g.totals.loansGiven ?? 0),
+    runningBalance:  a.runningBalance  + (g.totals.runningBalance ?? 0),
+    cashContributed: a.cashContributed + (g.totals.cashContributed ?? 0),
+    walletDeposits:  a.walletDeposits  + (g.totals.walletDeposits ?? 0),
+  }), { committed:0, paid:0, profit:0, expense_share:0, outstanding:0, loansGiven:0, runningBalance:0, cashContributed:0, walletDeposits:0 })
 
   return (
     <section>
@@ -259,6 +261,18 @@ function InvestorRunningTotals({ groups }) {
               <p className="text-[10px] text-gray-500 mt-0.5">{l}</p>
             </div>
           ))}
+        </div>
+        <div className="grid grid-cols-2 gap-1 text-center mt-3 pt-3 border-t border-brand-100">
+          <div>
+            <p className="text-[11px] font-bold mono text-gray-800">{inr(totals.cashContributed)}</p>
+            <p className="text-[10px] text-gray-500 mt-0.5">Out-of-pocket cash</p>
+          </div>
+          <div>
+            <p className={`text-[11px] font-bold mono ${totals.walletDeposits > 0 ? 'text-amber-700' : 'text-gray-400'}`}>
+              {inr(totals.walletDeposits)}
+            </p>
+            <p className="text-[10px] text-gray-500 mt-0.5">Wallet / cash refunded</p>
+          </div>
         </div>
       </div>
 
