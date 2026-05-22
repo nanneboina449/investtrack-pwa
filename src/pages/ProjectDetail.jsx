@@ -60,10 +60,20 @@ export default function ProjectDetail() {
   })
   const { isOwner, canEdit } = useMyRole(id, project?.is_owner)
 
-  const totalShare  = investors.data.reduce((s, i) => s + (i.share_percent ?? 0), 0)
+  const totalShare    = investors.data.reduce((s, i) => s + (i.share_percent ?? 0), 0)
   const totalProfit   = profits.data.reduce((s, p) => s + (p.amount ?? 0), 0)
   const totalExpenses = expenses.data.reduce((s, e) => s + (e.amount ?? 0), 0)
   const netReturn     = totalProfit - totalExpenses
+  // Capital flow at the project level — for the "Value Generated / Extracted /
+  // Active Capital" strip in the header.
+  const totalPaidIn   = payments.data
+    .filter(p => p.payment_type !== 'refund')
+    .reduce((s, p) => s + Number(p.amount || 0), 0)
+  const totalExtracted = payments.data
+    .filter(p => p.payment_type === 'refund' && (p.destination_project_id || p.destination_investor_id))
+    .reduce((s, p) => s + Number(p.amount || 0), 0)
+  const valueGenerated = totalPaidIn + totalProfit
+  const activeCapital  = valueGenerated - totalExtracted - totalExpenses
   const projectName  = project?.name ?? investors.data[0]?.project_name ?? 'Project'
   const projectTotalValue = project?.total_value ?? investors.data[0]?.total_value ?? 0
   const stakePercent = project?.our_stake_percent ?? 100
@@ -131,7 +141,7 @@ export default function ProjectDetail() {
           )}
         </div>
         <h1 className="text-xl font-bold mb-4">{projectName}</h1>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-3 gap-2 mb-2">
           <div className="bg-white/10 rounded-xl p-2.5 text-center">
             <p className="text-brand-100 text-[10px] mb-0.5">Property Value</p>
             <p className="font-bold mono text-xs">{inr(projectValue)}</p>
@@ -144,6 +154,24 @@ export default function ProjectDetail() {
           <div className="bg-white/10 rounded-xl p-2.5 text-center">
             <p className="text-brand-100 text-[10px] mb-0.5">Share Filled</p>
             <p className={`font-bold text-xs ${totalShare >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>{totalShare.toFixed(1)}%</p>
+          </div>
+        </div>
+        {/* Capital flow strip — paid + profit, what's been extracted, what's still working */}
+        <div className="grid grid-cols-3 gap-2">
+          <div className="bg-white/10 rounded-xl p-2.5 text-center">
+            <p className="text-brand-100 text-[10px] mb-0.5">Value Generated</p>
+            <p className="font-bold mono text-xs">{inr(valueGenerated)}</p>
+            <p className="text-[9px] text-white/60 mt-0.5">paid + profit</p>
+          </div>
+          <div className="bg-white/10 rounded-xl p-2.5 text-center">
+            <p className="text-brand-100 text-[10px] mb-0.5">Extracted</p>
+            <p className={`font-bold mono text-xs ${totalExtracted > 0 ? 'text-blue-200' : 'text-white/60'}`}>−{inr(totalExtracted)}</p>
+            <p className="text-[9px] text-white/60 mt-0.5">moved or lent out</p>
+          </div>
+          <div className="bg-white/10 rounded-xl p-2.5 text-center">
+            <p className="text-brand-100 text-[10px] mb-0.5">Active Capital</p>
+            <p className={`font-bold mono text-xs ${activeCapital >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{inr(activeCapital)}</p>
+            <p className="text-[9px] text-white/60 mt-0.5">still in this project</p>
           </div>
         </div>
       </div>
@@ -359,6 +387,11 @@ export default function ProjectDetail() {
                       {invPayments.map(p => {
                         const fromName = p.source_project_id ? projectNameById[p.source_project_id] : null
                         const toName   = p.destination_project_id ? projectNameById[p.destination_project_id] : null
+                        // Top-ups with a source are "Reinvested from X" — paper profit / capital
+                        // redeployed from another project. Without a source, fresh external cash.
+                        const cashOrReinvested = p.payment_type === 'top_up'
+                          ? (fromName ? 'reinvested' : 'cash')
+                          : null
                         return (
                           <div key={p.id} className="flex justify-between items-start text-xs">
                             <div className="flex-1 min-w-0">
@@ -366,15 +399,29 @@ export default function ProjectDetail() {
                                 <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${PAYMENT_TYPE_STYLE[p.payment_type]}`}>
                                   {PAYMENT_TYPE_LABEL[p.payment_type]}
                                 </span>
-                                {fromName && (
-                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
-                                    ← from {fromName}
+                                {cashOrReinvested === 'cash' && (
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">
+                                    💵 cash
                                   </span>
                                 )}
-                                {toName && (
-                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">
-                                    → to {toName}
+                                {cashOrReinvested === 'reinvested' && (
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-purple-50 text-purple-700">
+                                    ♻ reinvested
                                   </span>
+                                )}
+                                {fromName && (
+                                  <button type="button"
+                                    onClick={(e) => { e.stopPropagation(); navigate(`/projects/${p.source_project_id}`) }}
+                                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100">
+                                    ← from {fromName}
+                                  </button>
+                                )}
+                                {toName && (
+                                  <button type="button"
+                                    onClick={(e) => { e.stopPropagation(); navigate(`/projects/${p.destination_project_id}`) }}
+                                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 hover:bg-amber-100">
+                                    → to {toName}
+                                  </button>
                                 )}
                                 <span className="text-gray-400">{new Date(p.payment_date).toLocaleDateString('en-IN')}</span>
                               </div>
