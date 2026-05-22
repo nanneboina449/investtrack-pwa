@@ -586,6 +586,104 @@ export async function transferFundsAsLoan({ sourceInvestorId, destInvestorId, am
   return data
 }
 
+// Chronological cross-project ledger for one person — every transaction
+// (payment, profit distribution, expense allocation) that involved any
+// of their investor records, sorted by date, with a running portfolio
+// value computed on the way through.
+export function useInvestorLedger(investorIds) {
+  return useFetch(async () => {
+    if (!investorIds || investorIds.length === 0) return []
+    const [paymentsRes, distRes, expensesRes, investorsRes, projectsRes] = await Promise.all([
+      supabase.from('investor_payments')
+        .select('id, investor_id, project_id, amount, payment_type, payment_date, notes, source_project_id, destination_project_id, expense_id')
+        .in('investor_id', investorIds),
+      supabase.from('profit_distributions')
+        .select('id, investor_id, amount, profit_id, profit_records!inner(record_date, project_id)')
+        .in('investor_id', investorIds),
+      // Expense shares: need each of this person's investor records and
+      // each project's expenses; we'll join in JS.
+      supabase.from('project_expenses').select('id, project_id, amount, expense_date, description, category'),
+      supabase.from('investors').select('id, project_id, share_percent').in('id', investorIds),
+      supabase.from('my_projects').select('id, name'),
+    ])
+    const projectNameById = {}
+    for (const p of (projectsRes.data ?? [])) projectNameById[p.id] = p.name
+    const sharePctByRec = {}
+    for (const i of (investorsRes.data ?? [])) sharePctByRec[i.id] = Number(i.share_percent || 0)
+    const projectIdsOfPerson = new Set((investorsRes.data ?? []).map(i => i.project_id))
+
+    const rows = []
+    // Payments
+    for (const p of (paymentsRes.data ?? [])) {
+      const signed = p.payment_type === 'refund' ? -Number(p.amount) : Number(p.amount)
+      rows.push({
+        date: p.payment_date,
+        project_id: p.project_id,
+        project_name: projectNameById[p.project_id] ?? '?',
+        type: p.payment_type,
+        amount: signed,
+        notes: p.notes,
+        link_from: p.source_project_id ? projectNameById[p.source_project_id] : null,
+        link_to:   p.destination_project_id ? projectNameById[p.destination_project_id] : null,
+        kind: 'payment',
+      })
+    }
+    // Profit distributions
+    for (const d of (distRes.data ?? [])) {
+      const pr = d.profit_records
+      if (!pr) continue
+      rows.push({
+        date: pr.record_date,
+        project_id: pr.project_id,
+        project_name: projectNameById[pr.project_id] ?? '?',
+        type: 'profit_distribution',
+        amount: Number(d.amount),
+        kind: 'profit',
+      })
+    }
+    // Expense share allocations (per investor record in projects they're in)
+    for (const e of (expensesRes.data ?? [])) {
+      if (!projectIdsOfPerson.has(e.project_id)) continue
+      // Find the investor record this person has in that project
+      const inv = (investorsRes.data ?? []).find(i => i.project_id === e.project_id)
+      if (!inv) continue
+      const share = (sharePctByRec[inv.id] ?? 0) / 100
+      const allocated = Number(e.amount || 0) * share
+      if (allocated === 0) continue
+      rows.push({
+        date: e.expense_date,
+        project_id: e.project_id,
+        project_name: projectNameById[e.project_id] ?? '?',
+        type: 'expense_share',
+        amount: -allocated,
+        notes: e.description,
+        kind: 'expense',
+      })
+    }
+
+    // Sort by date, then by kind for stable order
+    rows.sort((a, b) => {
+      if (a.date < b.date) return -1
+      if (a.date > b.date) return 1
+      return 0
+    })
+
+    // Running portfolio value: profit + cash net for this person.
+    // Internal moves (refund with destination + matching top_up with source)
+    // are emitted as separate rows but their effect on the running total
+    // depends on whether both legs are in this person's records. For the
+    // ledger view, we keep running total = profit minus expenses plus paid
+    // (refunds subtract); that mirrors the dashboard's Running Balance.
+    let running = 0
+    for (const r of rows) {
+      if (r.kind === 'expense' || r.kind === 'profit') running += r.amount
+      else running += r.amount
+      r.running = running
+    }
+    return rows
+  }, [JSON.stringify(investorIds ?? [])])
+}
+
 // All investor records visible to the current user (across projects),
 // used for the inter-investor lending picker.
 export function useAllInvestors() {

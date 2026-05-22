@@ -1,6 +1,6 @@
 // src/pages/Dashboard.jsx
 import { useNavigate } from 'react-router-dom'
-import { useDashboard, useMyInvestments, useAllInvestorsSummary } from '../hooks/useData'
+import { useDashboard, useMyInvestments, useAllInvestorsSummary, useInvestorLedger } from '../hooks/useData'
 import { acceptPendingInvites } from '../hooks/useSharing'
 import { inr, pct } from '../lib/supabase'
 import { StatCard, Spinner, Empty } from '../components/ui'
@@ -271,9 +271,11 @@ function InvestorRunningTotals({ groups }) {
 
 function InvestorRow({ group }) {
   const [open, setOpen] = useState(false)
+  const [showLedger, setShowLedger] = useState(false)
   const { name, totals, projectCount, projects } = group
   const runningBalance = totals.runningBalance ?? 0
   const balancePositive = runningBalance >= 0
+  const investorIds = projects.map(p => p.investor_id)
 
   // Bar chart data for the expanded view — one bar per project, two series
   const chartData = projects.map(p => ({
@@ -352,6 +354,11 @@ function InvestorRow({ group }) {
             </div>
           )}
 
+          <button onClick={() => setShowLedger(true)}
+            className="w-full text-xs font-semibold text-brand-900 bg-white border border-brand-100 rounded-xl py-2 active:scale-95 transition-transform">
+            📜 View full ledger
+          </button>
+
           <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide pt-1">Per project</p>
           {projects.map(p => {
             const pOwes  = p.outstanding > 0.5
@@ -387,6 +394,81 @@ function InvestorRow({ group }) {
           })}
         </div>
       )}
+
+      {showLedger && (
+        <InvestorLedgerModal name={name} investorIds={investorIds} onClose={() => setShowLedger(false)} />
+      )}
+    </div>
+  )
+}
+
+// ── Chronological ledger across all projects for one investor ──
+function InvestorLedgerModal({ name, investorIds, onClose }) {
+  const ledger = useInvestorLedger(investorIds)
+  const TYPE_LABEL = {
+    share_contribution: { l: 'Share',        c: 'bg-blue-50 text-blue-700' },
+    top_up:             { l: 'Top-up',        c: 'bg-emerald-50 text-emerald-700' },
+    expense_paid:       { l: 'Paid expense',  c: 'bg-red-50 text-red-700' },
+    refund:             { l: 'Refund',        c: 'bg-amber-50 text-amber-700' },
+    profit_distribution:{ l: 'Profit',        c: 'bg-emerald-50 text-emerald-700' },
+    expense_share:      { l: 'Expense share', c: 'bg-red-50 text-red-700' },
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-gray-100 flex justify-between items-start">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-gray-400">Ledger</p>
+            <p className="font-bold text-lg text-gray-900">{name}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{ledger.data.length} transactions across {investorIds.length} projects</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {ledger.loading ? (
+            <div className="flex justify-center py-10"><Spinner size="lg" /></div>
+          ) : ledger.data.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-10">No transactions yet</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-50 text-gray-500 uppercase tracking-wide text-[10px]">
+                <tr>
+                  <th className="text-left py-2 px-4">Date</th>
+                  <th className="text-left py-2 px-2">Project</th>
+                  <th className="text-left py-2 px-2">Type</th>
+                  <th className="text-right py-2 px-2">Amount</th>
+                  <th className="text-right py-2 px-4">Running</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ledger.data.map((r, i) => {
+                  const meta = TYPE_LABEL[r.type] ?? { l: r.type, c: 'bg-gray-50 text-gray-600' }
+                  return (
+                    <tr key={i} className="border-t border-gray-50">
+                      <td className="py-2 px-4 text-gray-500 whitespace-nowrap">{new Date(r.date).toLocaleDateString('en-IN')}</td>
+                      <td className="py-2 px-2 text-gray-900 font-medium">
+                        {r.project_name}
+                        {r.link_from && <span className="block text-[10px] text-blue-600 mt-0.5">← from {r.link_from}</span>}
+                        {r.link_to   && <span className="block text-[10px] text-amber-600 mt-0.5">→ to {r.link_to}</span>}
+                      </td>
+                      <td className="py-2 px-2"><span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${meta.c}`}>{meta.l}</span></td>
+                      <td className={`py-2 px-2 text-right font-mono font-semibold ${r.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                        {r.amount >= 0 ? '+' : ''}{inr(r.amount)}
+                      </td>
+                      <td className={`py-2 px-4 text-right font-mono font-bold ${r.running >= 0 ? 'text-gray-800' : 'text-red-500'}`}>
+                        {inr(r.running)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="p-4 border-t border-gray-100 text-[10px] text-gray-400 text-center">
+          Running total = cumulative profit − expenses + paid + refunds (net cash position). Internal moves between projects cancel out across rows.
+        </div>
+      </div>
     </div>
   )
 }
