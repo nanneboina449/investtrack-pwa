@@ -63,6 +63,14 @@ alter table investor_payments
 create index if not exists investor_payments_source_project_idx      on investor_payments(source_project_id);
 create index if not exists investor_payments_destination_project_idx on investor_payments(destination_project_id);
 
+-- 2c. Direct link to cash_adjustments (closes audit BUG 2 — race-safe
+-- deletes of inter-investor loans without best-effort matching)
+alter table investor_payments
+  add column if not exists cash_adjustment_id uuid
+    references cash_adjustments(id) on delete cascade;
+
+create index if not exists investor_payments_cash_adj_idx on investor_payments(cash_adjustment_id);
+
 -- 2c. profit_distributions table
 create table if not exists profit_distributions (
   id          uuid primary key default uuid_generate_v4(),
@@ -683,21 +691,21 @@ begin
 
   insert into investor_payments
     (investor_id, project_id, amount, payment_type, payment_date, notes,
-     destination_project_id, destination_investor_id)
+     destination_project_id, destination_investor_id, cash_adjustment_id)
   values
     (p_source_investor_id, v_source_project_id, p_amount, 'refund',
      p_date,
      coalesce(p_notes, 'Lent to ' || v_dest_name),
-     v_dest_project_id, p_dest_investor_id);
+     v_dest_project_id, p_dest_investor_id, v_loan_id);
 
   insert into investor_payments
     (investor_id, project_id, amount, payment_type, payment_date, notes,
-     source_project_id, source_investor_id)
+     source_project_id, source_investor_id, cash_adjustment_id)
   values
     (p_dest_investor_id, v_dest_project_id, p_amount, 'top_up',
      p_date,
      coalesce(p_notes, 'Borrowed from ' || v_source_name),
-     v_source_project_id, p_source_investor_id);
+     v_source_project_id, p_source_investor_id, v_loan_id);
 
   return v_loan_id;
 end;
@@ -705,6 +713,110 @@ $$;
 
 grant execute on function transfer_funds_as_loan(uuid, uuid, numeric, numeric, date, text)
   to authenticated, service_role;
+
+-- ============================================================
+-- 11c. Backfill cash_adjustment_id for pre-existing inter-investor
+-- loan payments (best-effort match by amount + date + contributor;
+-- runs once per migration, not per delete). Audit BUG 2 cleanup.
+-- ============================================================
+update investor_payments ip
+set cash_adjustment_id = ca.id
+from cash_adjustments ca
+join loan_contributions lc on lc.loan_id = ca.id
+where ca.type = 'loan_given'
+  and ip.cash_adjustment_id is null
+  and ip.payment_type = 'refund'
+  and ip.investor_id = lc.investor_id
+  and ip.amount = lc.amount
+  and ip.payment_date = ca.adjustment_date
+  and ip.destination_investor_id is not null;
+
+update investor_payments ip
+set cash_adjustment_id = ca.id
+from cash_adjustments ca
+join loan_contributions lc on lc.loan_id = ca.id
+where ca.type = 'loan_given'
+  and ip.cash_adjustment_id is null
+  and ip.payment_type = 'top_up'
+  and ip.source_investor_id = lc.investor_id
+  and ip.amount = lc.amount
+  and ip.payment_date = ca.adjustment_date;
+
+-- ============================================================
+-- 11d. Refactor my_investments view per audit BUG 1 fix
+-- Reads profit allocations from profit_distributions (not the legacy
+-- share% × profit formula) so custom splits show correctly on the
+-- Dashboard My Investments section.
+-- ============================================================
+drop view if exists my_investments cascade;
+
+create view my_investments as
+with investor_financial_aggregates as (
+  select
+    i.id as investor_id,
+    coalesce(sum(pd.amount), 0) as total_profit_allocated,
+    coalesce((
+      select sum(pe.amount * i.share_percent / 100::numeric)
+      from project_expenses pe
+      where pe.project_id = i.project_id
+    ), 0) as total_expenses_allocated,
+    coalesce((
+      select sum(case
+        when payment_type in ('share_contribution', 'top_up', 'expense_paid') then amount
+        when payment_type = 'refund' then -amount
+        else 0
+      end)
+      from investor_payments ip
+      where ip.investor_id = i.id
+    ), 0) as net_cash_paid
+  from investors i
+  left join profit_distributions pd on pd.investor_id = i.id
+  group by i.id
+)
+select
+  i.id          as investor_id,
+  i.project_id,
+  i.name        as investor_name,
+  i.email       as investor_email,
+  i.share_percent,
+  i.amount_invested,
+  p.name        as project_name,
+  p.status      as project_status,
+  p.total_value,
+  p.our_stake_percent,
+  round(p.total_value * p.our_stake_percent / 100::numeric, 2)              as our_pool_value,
+  f.total_profit_allocated,
+  f.total_expenses_allocated,
+  (f.total_profit_allocated - f.total_expenses_allocated)                   as net_return,
+  (f.net_cash_paid + f.total_profit_allocated - f.total_expenses_allocated) as current_value
+from investors i
+join projects p on p.id = i.project_id
+join investor_financial_aggregates f on f.investor_id = i.id
+where i.email is not null
+  and lower(trim(i.email)) = lower(trim(coalesce(auth.email(), '')));
+
+grant select on my_investments to authenticated, service_role;
+
+-- ============================================================
+-- 11e. (OPTIONAL) Project book-lock trigger — uncomment to enable
+-- ============================================================
+create or replace function check_project_book_lock()
+returns trigger
+language plpgsql
+as $$
+declare v_status text;
+begin
+  select status into v_status from projects where id = coalesce(NEW.project_id, OLD.project_id);
+  if v_status = 'completed' then
+    raise exception 'Database Write Blocked: Project is completed — books are immutable. Re-open the project to make changes.';
+  end if;
+  return coalesce(NEW, OLD);
+end;
+$$;
+drop trigger if exists tr_lock_completed_project_payments on investor_payments;
+-- create trigger tr_lock_completed_project_payments
+--   before insert or update or delete on investor_payments
+--   for each row execute function check_project_book_lock();
 
 -- ============================================================
 -- 12. Optional helper view for the Payments tab UI

@@ -287,13 +287,19 @@ Mutations: `createProject`, `updateProject`, `deleteProject`, `createInvestor`, 
 
 ## 10. Known Limitations & Future Work
 
-- **Loans-received outstanding** (a borrower's payable side of an inter-investor loan) is not yet subtracted from their Running Balance — the borrower's `paid_net` includes the borrowed amount but no offsetting liability. Workaround: add a `cash_adjustment_id` link column on `investor_payments` so we can join back from the borrower's top-up to the loan and compute their outstanding share.
-- **No explicit Wallet table**. Wallet balance is currently derived (refunds-without-destination minus the implied next contribution). For a long-running app this should become a stored `investor_wallets` table with explicit "deposit to wallet" / "withdraw from wallet to project" transactions.
-- **Inter-investor loan cleanup on delete** uses a best-effort match by `(amount, date, contributor)`. Two identical inter-investor loans on the same day would be ambiguous. Add `cash_adjustment_id` to investor_payments to make this airtight.
-- **Project-level view replacement** for `investor_profit_summary` and `investor_running_balance` is blocked by Postgres's "cannot drop columns from view" check (a dependent view, likely `my_investments`, holds the column types). Worked around by reading `profit_distributions` directly in the frontend for custom-split-aware totals.
-- **No explicit "exit investor" flow**. To exit an investor cleanly, currently you record a refund + delete the investor. A dedicated "Exit Investor" sheet would do this atomically with a settlement preview.
-- **Project status = completed** is a soft close. Books stay editable. A "Close & Settle" action that refunds outstanding positions and freezes the project is a future addition.
-- **`my_investments` view definition** isn't tracked in this repo — it was created via a migration file referenced in commit `9bb79fc` but not committed. Pulling that view's `pg_get_viewdef` and pasting it into the consolidated setup would close the gap.
+### Resolved by the May 2026 audit (sections 11d, 11c, 11e in `investtrack_full_setup.sql`)
+
+- ✅ **Loans-received outstanding for borrowers** — now subtracted from Running Balance. The frontend computes it by joining `investor_payments` to `cash_adjustments` via the new `cash_adjustment_id` link.
+- ✅ **Inter-investor loan cleanup on delete** — `cash_adjustment_id` with `ON DELETE CASCADE` does the right thing atomically. The old best-effort match is gone from `deleteCashAdjustment`.
+- ✅ **`my_investments` view drift on custom splits** — view rewritten with a CTE that pulls `profit_distributions` and the actual ledger.
+- ✅ **`my_investments` view definition** — now committed in the consolidated setup (sections 11d).
+
+### Still open
+
+- **No explicit Wallet table**. Wallet balance is currently derived (refunds-without-destination minus implied next contribution). For thousands of rows per investor this becomes a frontend bottleneck. Recommended: an `investor_wallets` table that INSERTS on external refund and DEBITs on next deployment.
+- **No explicit "exit investor" flow**. To exit cleanly today you record a refund + delete the investor. A dedicated "Exit Investor" sheet would do this atomically with a settlement preview.
+- **Project status = completed is soft-close**. Books stay editable unless the `tr_lock_completed_project_payments` trigger is enabled (commented out in section 11e — uncomment to switch on). A "Close & Settle" UI flow that refunds outstanding positions and freezes the project is the next layer up.
+- **`investor_profit_summary` / `investor_running_balance` views** still can't be cleanly replaced via `CREATE OR REPLACE VIEW` due to dependent-view column-type lock. Worked around by reading `profit_distributions` directly in the frontend for custom-split-aware totals. The audit's recommendation — migrate aggregations to inline TVFs or materialized views with explicit refresh triggers — is a future cleanup.
 
 ---
 
