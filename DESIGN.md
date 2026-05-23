@@ -119,17 +119,25 @@ Located in `supabase/investtrack_full_setup.sql` (idempotent, re-runnable).
 Inserts the profit_record and the per-investor `profit_distributions` atomically.
 If `p_distributions` is null, auto-creates proportional rows. Otherwise inserts exactly what the caller specified.
 
-### `process_loan_repayment(p_loan_id, p_amount, p_type, p_to_project_id, p_date, p_notes)`
+### `process_loan_repayment(p_loan_id, p_amount, p_type, p_to_project_id, p_date, p_notes, p_dest_investor_map json)`
 
-Records a repayment and distributes proportionally to contributors. When `p_type='project_adjustment'`, also creates `top_up` payments on the destination project for each contributor (matched by case + whitespace-insensitive name). Auto-settles when total repaid ≥ principal × (1 + interest%/100).
+Records a repayment and distributes proportionally to contributors. When `p_type='project_adjustment'`, also creates `top_up` payments on the destination project for each contributor.
 
-### `reallocate_investor_position(p_source_investor_id, p_dest_project_id, p_amount, p_date, p_notes)`
+**Destination matching** — when `p_dest_investor_map` is supplied as a JSON array of `{contributor_id, dest_investor_id}` pairs, the RPC uses those UUIDs directly (Master Audit Phase B). When null, falls back to case + whitespace-insensitive name match.
 
-Atomic refund + top-up. Matches the destination investor by name. Used by both the Investors tab "⇄ Move" and the Cash Flow Reallocation form.
+Auto-settles when total repaid ≥ principal × (1 + interest%/100).
+
+### `reallocate_investor_position(p_source_investor_id, p_dest_project_id, p_amount, p_date, p_notes, p_dest_investor_id uuid)`
+
+Atomic refund + top-up between projects. When `p_dest_investor_id` is provided (UUID), uses it directly (Master Audit 2.1). When null, falls back to name matching. Used by both the Investors tab "⇄ Move" and the Cash Flow Reallocation form.
 
 ### `transfer_funds_as_loan(p_source_investor_id, p_dest_investor_id, p_amount, p_interest_pct, p_date, p_notes)`
 
-Inter-investor loan. Creates `cash_adjustments.loan_given` with the borrower as counterparty + `loan_contributions` row crediting the lender + the paired refund/top-up payment rows.
+Inter-investor loan. Creates `cash_adjustments.loan_given` with the borrower as counterparty + `loan_contributions` row crediting the lender + the paired refund/top-up payment rows, all linked back to the loan via `cash_adjustment_id`.
+
+### `delete_cash_adjustment(p_id uuid)`
+
+Safe-cleanup teardown of a cash_adjustment when the `cash_adjustment_id` FK is RESTRICT. Deletes linked `investor_payments` first, then the `cash_adjustment` (which cascades to `loan_contributions` and `loan_repayments` via their own FKs). All inside a transaction. Used by `deleteCashAdjustment` in `useData.js`.
 
 ---
 
@@ -138,15 +146,33 @@ Inter-investor loan. Creates `cash_adjustments.loan_given` with the borrower as 
 | Trigger | When | What it does |
 |---|---|---|
 | `expenses_to_payment` | AFTER INSERT on `project_expenses` | If `paid_by_investor_id` is set, auto-creates an `expense_paid` payment on the investor's ledger |
-| `projects_scale_investor_commitments` | AFTER UPDATE OF total_value / our_stake_percent on `projects` | Scales every investor's `amount_invested` proportionally to keep their share % consistent |
 | `investors_name_sync` | AFTER UPDATE OF name on `investors` | Propagates the new name to `loan_contributions.investor_name` and `repayment_distributions.investor_name` (denormalized text fields) |
 
-### Auto-cascade via FK ON DELETE
+**Dropped** — `projects_scale_investor_commitments` was removed per Master Audit 2.2. The scaling function `scale_investor_commitments_on_project_change()` is still defined (so older deployments don't error), but the trigger binding is gone. Investor commitment scaling is now an explicit checkbox in EditProjectSheet — see section 7 (Project detail).
 
-- Delete an investor → cascades to `investor_payments`, `loan_contributions`, `profit_distributions`, `repayment_distributions`
-- Delete a profit_record → cascades to `profit_distributions`
-- Delete a project_expense → `paid_by_investor_id` set null on dependent ledger rows
-- Delete a cash_adjustment → cascades to `loan_contributions` and `loan_repayments`; for inter-investor loans, the JS layer also cleans up the paired investor_payments via best-effort match
+**Optional / opt-in** — `check_project_book_lock()` function ships in section 11e of the consolidated SQL but the trigger creation is commented out. Uncomment to enable, which throws `Database Write Blocked: ...` on any insert/update/delete to `investor_payments` whose parent project is `status = 'completed'`.
+
+### FK ON DELETE behavior
+
+| Parent → Child | Behavior |
+|---|---|
+| `investors` → `investor_payments` | CASCADE |
+| `investors` → `loan_contributions` | CASCADE |
+| `investors` → `profit_distributions` | CASCADE |
+| `profit_records` → `profit_distributions` | CASCADE |
+| `project_expenses` → `investor_payments.expense_id` | SET NULL |
+| **`cash_adjustments` → `investor_payments.cash_adjustment_id`** | **RESTRICT** (Master Audit Phase B). Use `delete_cash_adjustment` RPC for safe teardown. |
+| `cash_adjustments` → `loan_contributions` | CASCADE |
+| `cash_adjustments` → `loan_repayments` | CASCADE |
+| `loan_repayments` → `repayment_distributions` | CASCADE |
+
+### Table-level CHECK constraints
+
+- `investor_payments.amount > 0`
+- `profit_records.amount` (any sign allowed; expense vs profit semantics is in the value)
+- `project_expenses.amount > 0`
+- `loan_repayments.amount > 0` (Master Audit Phase B)
+- `investors.share_percent > 0 AND <= 100`
 
 ---
 
@@ -157,11 +183,14 @@ Inter-investor loan. Creates `cash_adjustments.loan_given` with the borrower as 
 ```
 running_balance = profit_allocated
                 − expense_share_absorbed
-                + paid_net           (refunds subtract; aggregate across all their records)
-                + loans_given_outstanding
+                + paid_net                       (refunds subtract; aggregate across all their records)
+                + loans_given_outstanding         (receivables — money I'm owed back)
+                − loans_received_outstanding      (payables — money I owe — Master Audit Phase B)
 ```
 
-Where `loans_given_outstanding` = sum over each unsettled loan they contributed to of `contribution × (1 + interest%/100) − repaid_to_them_so_far`.
+Where:
+- `loans_given_outstanding` = sum over each unsettled loan they contributed to of `contribution × (1 + interest%/100) − repaid_to_them_so_far`
+- `loans_received_outstanding` = sum over each `top_up` row linked to an unsettled loan (via `cash_adjustment_id`) of `top_up.amount × (1 + interest%/100) − their_share_of_repaid`
 
 ### Aggregate row metrics
 
@@ -171,6 +200,7 @@ Where `loans_given_outstanding` = sum over each unsettled loan they contributed 
 | Expenses | sum of `project_expenses × share_percent / 100` |
 | Net cash | sum of payments with refunds subtracting |
 | Loans out | sum of unsettled `loan_contributions × (1 + interest%/100) − repaid` |
+| Loans in | sum of unsettled `top_up.amount × (1 + interest%/100) − share of repaid` (via `cash_adjustment_id` link) |
 | Committed | sum of `amount_invested` across all their investor records |
 | Out-of-pocket cash | sum of `share_contribution + top_up_without_source + expense_paid` |
 | Wallet | sum of `refund_without_destination` — refunds received but not redeployed |
@@ -241,26 +271,43 @@ The repo's `supabase/` folder contains the full migration timeline, but they're 
 
 Sections inside it:
 
-1. Column additions: `interest_rate_percent`, `paid_by_investor_id`
-2. New tables: `investor_payments` (+ link columns), `profit_distributions`
-3. Drop legacy auto-payment triggers that conflated commitment with paid
-4a. Trigger: expense paid by investor → auto-payment row
-4b. Trigger: scale investor commitments when project pool changes
-4c. Trigger: keep `investor_name` text columns in sync when investors are renamed
-5. RLS policies (select / insert / update / delete) + grants
-6. Data hygiene: trim + collapse whitespace on names; case-insensitive index
-7. Backfills:
-   - 7a. profit_distributions for pre-existing profit records (proportional)
-   - 7b. expense_paid payment rows for expenses with `paid_by_investor_id` set but missing linked payment
-8. View replacements:
-   - `my_projects` (subquery-based to avoid Cartesian fanout)
-   - `project_summary` (same fix)
-   - `loan_summary` (with interest fields)
-9. RPC: `process_loan_repayment` (interest + project_adjustment + case-insensitive match)
-10. RPC: `create_profit_record` (custom distributions)
-11. RPC: `reallocate_investor_position` (atomic linked refund + top_up)
-11b. RPC: `transfer_funds_as_loan` (inter-investor lending)
-12. Helper view: `investor_payment_history`
+| § | What |
+|---|---|
+| 1 | Column additions: `interest_rate_percent` on `cash_adjustments`, `paid_by_investor_id` on `project_expenses` |
+| 2a | New table `investor_payments` |
+| 2b | Cross-project link columns on `investor_payments` (source/destination project + investor) |
+| 2c | `cash_adjustment_id` link with **ON DELETE RESTRICT** (Master Audit Phase B). New table `profit_distributions`. |
+| 3 | Drop legacy auto-payment triggers that conflated commitment with paid |
+| 4a | Trigger `expenses_to_payment` — expense paid by investor → auto-payment row |
+| 4b | Function `scale_investor_commitments_on_project_change` retained; **trigger binding DROPPED** per Master Audit 2.2 |
+| 4c | Trigger `investors_name_sync` — propagate name updates to denormalized text columns |
+| 5 | RLS policies (select / insert / update / delete) + grants for `investor_payments` and `profit_distributions` |
+| 6 | Data hygiene: trim + collapse whitespace on names; normalized case-insensitive name index |
+| 7a | Backfill `profit_distributions` for pre-existing profit records (proportional) |
+| 7b | Backfill `investor_payments` for expenses with `paid_by_investor_id` set but no linked payment |
+| 8a | View `my_projects` — subquery-based to avoid Cartesian fanout |
+| 8b | View `project_summary` — same subquery treatment |
+| 8c | View `loan_summary` — with `interest_amount`, `total_due_with_interest` |
+| 9 | RPC `process_loan_repayment(loan, amount, type, to_project, date, notes, **dest_investor_map**)` — interest + project_adjustment + UUID map (Phase B) with name match fallback |
+| 9b | RPC `delete_cash_adjustment(uuid)` — safe teardown for the RESTRICT FK |
+| 9c | `CHECK (amount > 0)` on `loan_repayments` |
+| 10 | RPC `create_profit_record(project, amount, date, notes, distributions json)` |
+| 11 | RPC `reallocate_investor_position(source, dest_project, amount, date, notes, **dest_investor_id**)` — UUID-aware (Audit 2.1) |
+| 11b | RPC `transfer_funds_as_loan(source, dest, amount, interest_pct, date, notes)` — inter-investor lending |
+| 11c | Backfill `cash_adjustment_id` on historical inter-investor loan payments |
+| 11d | View `my_investments` — CTE that reads `profit_distributions` + ledger (custom-split-aware) |
+| 11e | Function `check_project_book_lock()`; trigger creation commented out (opt-in) |
+| 12 | Helper view `investor_payment_history` for the Payments tab UI |
+
+### Standalone migration files (each idempotent — applies one audit pass)
+
+| File | Patches |
+|---|---|
+| `audit_fixes.sql` | First audit: `cash_adjustment_id` column + CASCADE, `my_investments` rewrite, loan-orphan + borrower-inflation fixes |
+| `audit_master_fixes.sql` | Master Audit Section 2: UUID match in `reallocate_investor_position`, drop auto-scale commitments trigger |
+| `audit_phase_b_fixes.sql` | Master Audit Phase B: RESTRICT FK + `delete_cash_adjustment` RPC, UUID map for `process_loan_repayment`, positive-amount CHECK on loan_repayments |
+
+You can run the standalone files against a live DB (they detect existing state), or simply re-run `investtrack_full_setup.sql` which has every change folded in.
 
 ---
 
@@ -294,7 +341,7 @@ Mutations: `createProject`, `updateProject`, `deleteProject`, `createInvestor`, 
 ### Resolved by the May 2026 audit (sections 11d, 11c, 11e in `investtrack_full_setup.sql`)
 
 - ✅ **Loans-received outstanding for borrowers** — now subtracted from Running Balance. The frontend computes it by joining `investor_payments` to `cash_adjustments` via the new `cash_adjustment_id` link.
-- ✅ **Inter-investor loan cleanup on delete** — `cash_adjustment_id` with `ON DELETE CASCADE` does the right thing atomically. The old best-effort match is gone from `deleteCashAdjustment`.
+- ✅ **Inter-investor loan cleanup on delete** — `cash_adjustment_id` link column added. The old best-effort match by `(amount, date, contributor)` is gone from `deleteCashAdjustment`. FK was later switched from CASCADE → RESTRICT in Phase B for ledger preservation; teardown now goes through the `delete_cash_adjustment` RPC.
 - ✅ **`my_investments` view drift on custom splits** — view rewritten with a CTE that pulls `profit_distributions` and the actual ledger.
 - ✅ **`my_investments` view definition** — now committed in the consolidated setup (sections 11d).
 
