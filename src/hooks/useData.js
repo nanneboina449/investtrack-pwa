@@ -191,12 +191,30 @@ export async function updatePerson({ currentName, newName, email, phone }) {
     return { updated: 0 }
   }
 
-  const { error: updErr, count } = await supabase
+  // .select() forces PostgREST to return the rows that were actually
+  // updated, so we can verify the count matches our intent. Without
+  // it, a missing or restrictive RLS UPDATE policy will silently match
+  // zero rows and the caller would see "0 updated" with no error —
+  // exactly the bug fix_investors_update_rls.sql addresses.
+  const { data: updated, error: updErr } = await supabase
     .from('investors')
-    .update(patch, { count: 'exact' })
+    .update(patch)
     .in('id', targetIds)
+    .select('id')
   if (updErr) throw updErr
-  return { updated: count ?? targetIds.length }
+  const count = updated?.length ?? 0
+  if (count === 0) {
+    // Distinguish RLS denial from "nothing matched" by checking
+    // whether the SELECT-side worked (targetIds came from a fresh
+    // select, so the rows DO exist). Zero updated here can only mean
+    // the UPDATE policy is missing or denying.
+    throw new Error(
+      `Update was silently rejected by the database — most likely the ` +
+      `investors_update RLS policy is missing. Run ` +
+      `supabase/fix_investors_update_rls.sql in the Supabase SQL editor.`
+    )
+  }
+  return { updated: count }
 }
 
 // ── Profit Records ────────────────────────────────────────────

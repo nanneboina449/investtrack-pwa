@@ -51,6 +51,23 @@ alter table investors
 comment on column investors.phone is
   'Free-text phone number. Managed centrally in the /investors screen — when edited there, the update is broadcast to every investor row sharing the same normalized name so a person has consistent contact details across projects.';
 
+-- 1e. CRITICAL: investors_update RLS policy.
+-- The original schema enabled RLS on investors but only created
+-- SELECT / INSERT / DELETE policies, leaving UPDATE silently denied.
+-- updateInvestor() and the new updatePerson() batch update both
+-- returned 0 rows affected with no error because of this gap.
+-- This adds the missing UPDATE policy mirroring the INSERT one
+-- (owner + editor can update).
+drop policy if exists "investors_update" on investors;
+
+create policy "investors_update" on investors
+  for update
+  using (has_project_edit(project_id))
+  with check (has_project_edit(project_id));
+
+comment on policy "investors_update" on investors is
+  'Project owners and editors can update investor rows on projects they have edit access to. Added after debugging the Investors-tab batch edit returning 0 rows updated.';
+
 -- ============================================================
 -- 2. NEW TABLES
 -- ============================================================
