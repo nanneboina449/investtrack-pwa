@@ -796,6 +796,7 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
   const submit = async () => {
     const p = parseFloat(form.share_percent)
     if (!form.name)              { setError('Name is required'); return }
+    if (!form.email || !form.email.includes('@')) { setError('A valid email is required'); return }
     if (!p || p > remainingShare){ setError(`Share must be between 0 and ${remainingShare.toFixed(1)}%`); return }
     if (!form.amount_invested)   { setError('Amount is required'); return }
     setSaving(true); setError(null)
@@ -889,7 +890,21 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
         {/* Required fields */}
         <Field label="Full Name *">
           <input className="input" placeholder="e.g. Ravi Kumar" value={form.name}
-            onChange={e => set('name', e.target.value)} autoFocus />
+            onChange={e => set('name', e.target.value)} autoFocus required />
+        </Field>
+
+        <Field label="Email *">
+          <input
+            className="input"
+            type="email"
+            placeholder="investor@email.com"
+            value={form.email}
+            onChange={e => set('email', e.target.value)}
+            required
+          />
+          <p className="text-[10px] text-gray-400 mt-1">
+            Required — used to link this investor to their portfolio when they log in. They also get a Viewer invite to this project.
+          </p>
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
@@ -932,14 +947,12 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
 
         {/* Optional fields */}
         <Collapsible label="Optional details" icon="📋">
-          <Field label="Email (sends app invite)">
-            <input className="input" type="email" placeholder="investor@email.com"
-              value={form.email} onChange={e => set('email', e.target.value)} />
-            {form.email && <p className="text-xs text-blue-500 mt-1">✉️ They'll get a Viewer invite to this project</p>}
-          </Field>
           <Field label="Phone">
             <input className="input" type="tel" placeholder="+91 98765 43210"
               value={form.phone} onChange={e => set('phone', e.target.value)} />
+            <p className="text-[10px] text-gray-400 mt-1">
+              Shared with all this person's records in the Investors tab.
+            </p>
           </Field>
           <Field label="Notes">
             <textarea className="input resize-none" rows={2} placeholder="Optional…"

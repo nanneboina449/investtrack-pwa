@@ -149,24 +149,54 @@ export async function updateInvestor(id, values) {
   if (error) throw error
 }
 
-// Claim an investor record as belonging to the logged-in user by writing
-// the user's auth email onto that row. Used by the My Portfolio empty
-// state — instead of fuzzy-matching by name forever, the user explicitly
-// says "this investor row is me" and the next portfolio reload picks it
-// up via the strict email match.
+// Update a PERSON across every project they're on. Treats investors
+// with the same normalized name (lowercase + whitespace collapsed) as
+// the same person and propagates email/phone/displayName updates to
+// every matching row. RLS may reject rows the user can't edit; we
+// silently skip those and report the count actually updated.
 //
-// RLS only allows project owners to update investor rows on their own
-// projects, which is exactly the set the empty state offers as claim
-// candidates — anything outside that scope would fail at the policy
-// layer anyway.
-export async function linkInvestorToMyEmail(investorId) {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user?.email) throw new Error('Not signed in')
-  const { error } = await supabase
+// Used by /investors — the central contact-details management screen.
+export async function updatePerson({ currentName, newName, email, phone }) {
+  const norm = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+  const key = norm(currentName)
+  if (!key) throw new Error('currentName is required')
+
+  // Find every row matching the current normalized name (RLS-scoped)
+  const { data: rows, error: findErr } = await supabase
     .from('investors')
-    .update({ email: user.email })
-    .eq('id', investorId)
-  if (error) throw error
+    .select('id, name')
+    .eq('is_deleted', false)
+  if (findErr) throw findErr
+  const targetIds = (rows ?? [])
+    .filter(r => norm(r.name) === key)
+    .map(r => r.id)
+  if (targetIds.length === 0) {
+    throw new Error(`No investor records found for "${currentName}"`)
+  }
+
+  // Build the patch — only include fields the caller actually wants to
+  // change. `email`/`phone` of '' (empty string) is treated as "clear it"
+  // and stored as null; null/undefined means "don't touch".
+  const patch = {}
+  if (newName !== undefined && newName !== null && newName.trim() !== '') {
+    patch.name = newName.trim()
+  }
+  if (email !== undefined && email !== null) {
+    patch.email = email.trim() === '' ? null : email.trim()
+  }
+  if (phone !== undefined && phone !== null) {
+    patch.phone = phone.trim() === '' ? null : phone.trim()
+  }
+  if (Object.keys(patch).length === 0) {
+    return { updated: 0 }
+  }
+
+  const { error: updErr, count } = await supabase
+    .from('investors')
+    .update(patch, { count: 'exact' })
+    .in('id', targetIds)
+  if (updErr) throw updErr
+  return { updated: count ?? targetIds.length }
 }
 
 // ── Profit Records ────────────────────────────────────────────
@@ -730,7 +760,7 @@ export function useAllInvestorsAdmin(includeDeleted = false) {
   return useFetch(async () => {
     const [invsRes, projsRes] = await Promise.all([
       supabase.from('investors')
-        .select('id, project_id, name, email, share_percent, amount_invested, is_deleted, created_at')
+        .select('id, project_id, name, email, phone, share_percent, amount_invested, is_deleted, created_at')
         .order('name'),
       supabase.from('my_projects').select('id, name, status'),
     ])
@@ -1017,14 +1047,11 @@ export function useMyPortfolio() {
     //   1. strict        — email AND name both match (preferred)
     //   2. email-only    — drop the name check (handles name drift on a
     //                      record that already has the user's email)
-    //   3. none          — render empty state with a CLAIM list: every
-    //                      investor row on a project the user owns, with
-    //                      a "This is me" button that writes the user's
-    //                      email onto that row. Once claimed, the next
-    //                      reload hits the strict-match path.
-    //
-    // The claim flow replaces fuzzy matching with an explicit user action,
-    // matching Phase C's "explicit > implicit" principle at the UI layer.
+    //   3. none          — render empty state pointing the user at the
+    //                      /investors tab to add their email to their
+    //                      person record. updatePerson() broadcasts the
+    //                      email change across every project they're on,
+    //                      so a single edit there unblocks this screen.
     const ownedProjectIds = new Set(ownedProjects.map(p => p.id))
     const allInvs = allInvestorsRes.data ?? []
     const candidatesByEmail = allInvs.filter(i =>
