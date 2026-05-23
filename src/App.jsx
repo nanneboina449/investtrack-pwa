@@ -4,7 +4,10 @@ import { useAuth } from './contexts/AuthContext'
 import { isMisconfigured } from './lib/supabase'
 import Layout from './components/Layout'
 import Auth          from './pages/Auth'
-import Dashboard     from './pages/Dashboard'
+// MyPortfolio replaces the legacy org-wide Dashboard at /. The
+// Dashboard.jsx file is retained in src/pages but no longer routed —
+// see investtrack_portfolio_ui_spec.pdf for the personal-only view rationale.
+import MyPortfolio   from './pages/MyPortfolio'
 import Projects      from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
 import CashFlow      from './pages/CashFlow'
@@ -80,7 +83,7 @@ function MainApp() {
         <ProtectedRoute>
           <Layout>
             <Routes>
-              <Route path="/"             element={<Dashboard />} />
+              <Route path="/"             element={<MyPortfolio />} />
               <Route path="/projects"     element={<Projects />} />
               <Route path="/projects/:id" element={<ProjectDetail />} />
               <Route path="/cashflow"     element={<CashFlow />} />

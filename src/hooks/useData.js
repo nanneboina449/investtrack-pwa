@@ -921,3 +921,282 @@ export function useMyInvestments() {
     return data
   })
 }
+
+// ── My Portfolio (strictly the logged-in user's data) ─────────
+// Aggregates everything for one person:
+//   - their projects (current value per project)
+//   - loans they GAVE that are still outstanding (assets / receivable)
+//   - loans they RECEIVED that are still outstanding (liabilities / payable)
+//   - the timeline of every event on their investor records (for AreaChart)
+//
+// Identification rule: per investtrack_portfolio_ui_spec.pdf, match
+// investors rows on EXACT name + email — i.e. the row's email matches
+// auth.email() AND the row's name matches user_metadata.full_name. If
+// the user's name metadata isn't set, falls back to email-only so the
+// screen still works (with a debug warning).
+export function useMyPortfolio() {
+  return useFetch(async () => {
+    // 1. Identify the logged-in user
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return null
+    const norm = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+    const myEmail = norm(user.email)
+    const myName  = norm(user.user_metadata?.full_name)
+    if (!myEmail) return null
+
+    // 2. Pull every investor row, then filter to the user's records.
+    // RLS already restricts to projects the user can see (owner +
+    // shared); we further filter to rows whose email (and name, when
+    // available) match the logged-in identity.
+    const [allInvestorsRes, projectsRes] = await Promise.all([
+      supabase.from('investors')
+        .select('id, project_id, name, email, share_percent, amount_invested, is_deleted'),
+      supabase.from('my_projects').select('id, name, status'),
+    ])
+    if (allInvestorsRes.error) throw allInvestorsRes.error
+
+    const projectMap = {}
+    for (const p of (projectsRes.data ?? [])) projectMap[p.id] = p
+
+    const myRecords = (allInvestorsRes.data ?? []).filter(i => {
+      if (i.is_deleted) return false
+      if (norm(i.email) !== myEmail) return false
+      // If user has a name in metadata, require name match too. Otherwise
+      // (legacy accounts), accept any record with this email.
+      if (myName && norm(i.name) !== myName) return false
+      return true
+    })
+
+    if (myRecords.length === 0) {
+      return {
+        identity: { email: user.email, name: user.user_metadata?.full_name ?? null },
+        empty: true,
+        runningBalance: 0, netReturn: 0, invested: 0, realizedProfit: 0, totalExpenses: 0,
+        projects: [], loansGiven: [], loansReceived: [], timeline: [],
+      }
+    }
+
+    const myIds = myRecords.map(r => r.id)
+    const myProjectIds = [...new Set(myRecords.map(r => r.project_id))]
+
+    // 3. Fetch only what's needed for these records
+    const [paymentsRes, distributionsRes, expensesRes, loanContribsRes,
+           loanCashRes, repayDistRes, loanRepayRes] = await Promise.all([
+      supabase.from('investor_payments')
+        .select('id, investor_id, project_id, amount, payment_type, payment_date, notes, source_project_id, destination_project_id, destination_investor_id, cash_adjustment_id, expense_id')
+        .in('investor_id', myIds),
+      supabase.from('profit_distributions')
+        .select('id, investor_id, amount, profit_id, profit_records!inner(record_date, project_id)')
+        .in('investor_id', myIds),
+      // Expense shares: need all expenses on the projects I'm in
+      supabase.from('project_expenses')
+        .select('id, project_id, amount, expense_date, description, category')
+        .in('project_id', myProjectIds),
+      supabase.from('loan_contributions')
+        .select('id, loan_id, investor_id, project_id, amount')
+        .in('investor_id', myIds),
+      supabase.from('cash_adjustments')
+        .select('id, amount, interest_rate_percent, is_settled, type, counterparty, adjustment_date'),
+      supabase.from('repayment_distributions').select('loan_contribution_id, amount_returned'),
+      supabase.from('loan_repayments').select('loan_id, amount'),
+    ])
+
+    const loanById = {}
+    for (const l of (loanCashRes.data ?? [])) loanById[l.id] = l
+
+    // 4. Headline aggregates
+    let profitTotal = 0
+    for (const d of (distributionsRes.data ?? [])) profitTotal += Number(d.amount || 0)
+
+    let expenseTotal = 0
+    const expenseByProject = {}
+    for (const e of (expensesRes.data ?? [])) {
+      expenseByProject[e.project_id] = (expenseByProject[e.project_id] ?? 0) + Number(e.amount || 0)
+    }
+    for (const rec of myRecords) {
+      const share = Number(rec.share_percent || 0) / 100
+      expenseTotal += (expenseByProject[rec.project_id] ?? 0) * share
+    }
+
+    // Net cash paid (positive = money out of wallet into projects; refund subtracts)
+    let paidNet = 0
+    let cashContributed = 0  // external cash deployed (excludes internal moves)
+    let cashBack = 0         // external cash returned (refund without destination)
+    for (const p of (paymentsRes.data ?? [])) {
+      const amt = Number(p.amount || 0)
+      const sign = p.payment_type === 'refund' ? -1 : 1
+      paidNet += sign * amt
+      if (p.payment_type === 'refund') {
+        if (!p.destination_project_id) cashBack += amt
+      } else {
+        const isInternalMove = p.payment_type === 'top_up' && !!p.source_project_id
+        if (!isInternalMove) cashContributed += amt
+      }
+    }
+
+    // Loans GIVEN (assets / receivables)
+    const repaidByContrib = {}
+    for (const rd of (repayDistRes.data ?? [])) {
+      repaidByContrib[rd.loan_contribution_id] =
+        (repaidByContrib[rd.loan_contribution_id] ?? 0) + Number(rd.amount_returned || 0)
+    }
+    const loansGiven = []
+    let loansGivenOutstanding = 0
+    for (const lc of (loanContribsRes.data ?? [])) {
+      const loan = loanById[lc.loan_id]
+      if (!loan) continue
+      const interest = Number(loan.interest_rate_percent || 0)
+      const expected = Number(lc.amount || 0) * (1 + interest / 100)
+      const repaid   = repaidByContrib[lc.id] ?? 0
+      const outstanding = Math.max(0, expected - repaid)
+      if (loan.is_settled || outstanding <= 0.01) continue
+      loansGivenOutstanding += outstanding
+      loansGiven.push({
+        id: lc.id,
+        loan_id: loan.id,
+        counterparty: loan.counterparty || '—',
+        date: loan.adjustment_date,
+        principal: Number(lc.amount || 0),
+        interest_pct: interest,
+        outstanding,
+      })
+    }
+
+    // Loans RECEIVED (liabilities / payables)
+    const repaidByLoan = {}
+    for (const lr of (loanRepayRes.data ?? [])) {
+      repaidByLoan[lr.loan_id] = (repaidByLoan[lr.loan_id] ?? 0) + Number(lr.amount || 0)
+    }
+    const loansReceived = []
+    let loansReceivedOutstanding = 0
+    for (const p of (paymentsRes.data ?? [])) {
+      if (p.payment_type !== 'top_up' || !p.cash_adjustment_id) continue
+      const loan = loanById[p.cash_adjustment_id]
+      if (!loan || loan.is_settled) continue
+      const interest = Number(loan.interest_rate_percent || 0)
+      const expectedBack = Number(p.amount || 0) * (1 + interest / 100)
+      const totalLoan = Number(loan.amount || 0)
+      const totalRepaid = repaidByLoan[p.cash_adjustment_id] ?? 0
+      const borrowerShareRepaid = totalLoan > 0
+        ? (Number(p.amount) / totalLoan) * totalRepaid : 0
+      const outstanding = Math.max(0, expectedBack - borrowerShareRepaid)
+      if (outstanding <= 0.01) continue
+      loansReceivedOutstanding += outstanding
+      loansReceived.push({
+        id: p.id,
+        loan_id: loan.id,
+        counterparty: loan.counterparty || '—',
+        date: loan.adjustment_date,
+        principal: Number(p.amount || 0),
+        interest_pct: interest,
+        outstanding,
+      })
+    }
+
+    // Per-project breakdown (asset cards)
+    const projectsRollup = {}
+    for (const rec of myRecords) {
+      const proj = projectMap[rec.project_id]
+      if (!proj) continue
+      const share = Number(rec.share_percent || 0) / 100
+      const myProfit  = (distributionsRes.data ?? [])
+        .filter(d => d.investor_id === rec.id)
+        .reduce((s, d) => s + Number(d.amount || 0), 0)
+      const myExpense = (expenseByProject[rec.project_id] ?? 0) * share
+      const myPaidNet = (paymentsRes.data ?? [])
+        .filter(p => p.investor_id === rec.id)
+        .reduce((s, p) => s + (p.payment_type === 'refund' ? -1 : 1) * Number(p.amount || 0), 0)
+      const currentValue = myPaidNet + myProfit - myExpense
+      if (!projectsRollup[rec.project_id]) {
+        projectsRollup[rec.project_id] = {
+          project_id: rec.project_id,
+          name: proj.name,
+          status: proj.status,
+          share_percent: Number(rec.share_percent || 0),
+          invested: 0, profit: 0, expense: 0, currentValue: 0,
+        }
+      }
+      const r = projectsRollup[rec.project_id]
+      r.invested     += myPaidNet
+      r.profit       += myProfit
+      r.expense      += myExpense
+      r.currentValue += currentValue
+    }
+    const projects = Object.values(projectsRollup)
+      .sort((a, b) => b.currentValue - a.currentValue)
+
+    // Hero running balance — same formula as the project-owner Dashboard,
+    // restricted to this person's records.
+    const runningBalance = profitTotal - expenseTotal + paidNet
+      + loansGivenOutstanding - loansReceivedOutstanding
+
+    // 5. Timeline for the AreaChart and ledger view
+    const projectNameById = {}
+    for (const p of (projectsRes.data ?? [])) projectNameById[p.id] = p.name
+    const rows = []
+    for (const p of (paymentsRes.data ?? [])) {
+      const signed = p.payment_type === 'refund' ? -Number(p.amount) : Number(p.amount)
+      let label = 'Payment'
+      if (p.payment_type === 'share_contribution') label = 'Capital Contribution'
+      else if (p.payment_type === 'top_up' && p.source_project_id) label = 'Capital Reallocation (in)'
+      else if (p.payment_type === 'top_up')   label = 'Top-up'
+      else if (p.payment_type === 'refund' && p.destination_project_id) label = 'Capital Reallocation (Move)'
+      else if (p.payment_type === 'refund')   label = 'Refund'
+      else if (p.payment_type === 'expense_paid') label = 'Expense Paid'
+      rows.push({
+        kind: 'payment',
+        type: p.payment_type,
+        date: p.payment_date,
+        amount: signed,
+        label,
+        sub: projectNameById[p.project_id] ?? '',
+        notes: p.notes ?? null,
+      })
+    }
+    for (const d of (distributionsRes.data ?? [])) {
+      const pr = d.profit_records
+      if (!pr) continue
+      rows.push({
+        kind: 'profit',
+        type: 'profit_distribution',
+        date: pr.record_date,
+        amount: Number(d.amount),
+        label: 'Profit Distribution',
+        sub: projectNameById[pr.project_id] ?? '',
+      })
+    }
+    for (const e of (expensesRes.data ?? [])) {
+      if (!myProjectIds.includes(e.project_id)) continue
+      const rec = myRecords.find(r => r.project_id === e.project_id)
+      if (!rec) continue
+      const share = Number(rec.share_percent || 0) / 100
+      const allocated = Number(e.amount || 0) * share
+      if (allocated === 0) continue
+      rows.push({
+        kind: 'expense',
+        type: 'expense_share',
+        date: e.expense_date,
+        amount: -allocated,
+        label: 'Expense Absorbed',
+        sub: e.description || e.category || '',
+      })
+    }
+    rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    let running = 0
+    for (const r of rows) { running += r.amount; r.running = running }
+
+    return {
+      identity: { email: user.email, name: user.user_metadata?.full_name ?? null },
+      empty: false,
+      runningBalance,
+      netReturn: profitTotal - expenseTotal,
+      invested: cashContributed - cashBack,  // net out of pocket
+      realizedProfit: profitTotal,
+      totalExpenses: expenseTotal,
+      projects,
+      loansGiven,
+      loansReceived,
+      timeline: rows,
+    }
+  })
+}
