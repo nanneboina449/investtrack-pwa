@@ -63,11 +63,22 @@ alter table investor_payments
 create index if not exists investor_payments_source_project_idx      on investor_payments(source_project_id);
 create index if not exists investor_payments_destination_project_idx on investor_payments(destination_project_id);
 
--- 2c. Direct link to cash_adjustments (closes audit BUG 2 — race-safe
--- deletes of inter-investor loans without best-effort matching)
+-- 2c. Direct link to cash_adjustments (audit BUG 2 — race-safe deletes
+-- of inter-investor loans without best-effort matching).
+-- FK is ON DELETE RESTRICT — historical ledgers can't be wiped by a
+-- stray DELETE. Use delete_cash_adjustment(uuid) RPC for safe teardown.
 alter table investor_payments
-  add column if not exists cash_adjustment_id uuid
-    references cash_adjustments(id) on delete cascade;
+  add column if not exists cash_adjustment_id uuid;
+
+-- Drop any prior FK so we can re-add with the correct constraint
+alter table investor_payments
+  drop constraint if exists investor_payments_cash_adjustment_id_fkey;
+
+alter table investor_payments
+  add constraint investor_payments_cash_adjustment_id_fkey
+  foreign key (cash_adjustment_id)
+  references cash_adjustments(id)
+  on delete restrict;
 
 create index if not exists investor_payments_cash_adj_idx on investor_payments(cash_adjustment_id);
 
@@ -442,15 +453,20 @@ where ca.type in ('loan_given','loan_received')
 group by ca.id;
 
 -- ============================================================
--- 9. RPC: process_loan_repayment — interest + project_adjustment + case-insensitive match
+-- 9. RPC: process_loan_repayment — interest + project_adjustment
+-- + optional UUID map for destination matching (Audit Phase B fix).
+-- Falls back to case+whitespace insensitive name match if no map.
 -- ============================================================
+drop function if exists process_loan_repayment(uuid, numeric, text, uuid, date, text);
+
 create or replace function process_loan_repayment(
-  p_loan_id       uuid,
-  p_amount        numeric,
-  p_type          text,
-  p_to_project_id uuid default null,
-  p_date          date default current_date,
-  p_notes         text default null
+  p_loan_id            uuid,
+  p_amount             numeric,
+  p_type               text,
+  p_to_project_id      uuid default null,
+  p_date               date default current_date,
+  p_notes              text default null,
+  p_dest_investor_map  json default null
 ) returns uuid
 language plpgsql
 as $$
@@ -482,22 +498,35 @@ begin
          v_contribution.project_id, v_dist_amount);
 
       if p_type = 'project_adjustment' and p_to_project_id is not null then
-        select id into v_dest_investor_id
-        from investors
-        where project_id = p_to_project_id
-          and lower(regexp_replace(trim(name), '\s+', ' ', 'g'))
-              = lower(regexp_replace(trim(v_contribution.investor_name), '\s+', ' ', 'g'))
-        limit 1;
+        v_dest_investor_id := null;
+
+        -- Prefer explicit UUID map
+        if p_dest_investor_map is not null then
+          select (item->>'dest_investor_id')::uuid into v_dest_investor_id
+          from json_array_elements(p_dest_investor_map) item
+          where (item->>'contributor_id')::uuid = v_contribution.investor_id
+          limit 1;
+        end if;
+
+        -- Fall back to name match
+        if v_dest_investor_id is null then
+          select id into v_dest_investor_id
+          from investors
+          where project_id = p_to_project_id
+            and lower(regexp_replace(trim(name), '\s+', ' ', 'g'))
+                = lower(regexp_replace(trim(v_contribution.investor_name), '\s+', ' ', 'g'))
+          limit 1;
+        end if;
 
         if v_dest_investor_id is not null then
           insert into investor_payments
             (investor_id, project_id, amount, payment_type, payment_date, notes,
-             source_project_id, source_investor_id)
+             source_project_id, source_investor_id, cash_adjustment_id)
           values
             (v_dest_investor_id, p_to_project_id, v_dist_amount, 'top_up',
              p_date,
              'From loan repayment on source project',
-             v_contribution.project_id, v_contribution.investor_id);
+             v_contribution.project_id, v_contribution.investor_id, p_loan_id);
         end if;
       end if;
     end loop;
@@ -513,8 +542,33 @@ begin
 end;
 $$;
 
-grant execute on function process_loan_repayment(uuid, numeric, text, uuid, date, text)
+grant execute on function process_loan_repayment(uuid, numeric, text, uuid, date, text, json)
   to authenticated, service_role;
+
+-- ============================================================
+-- 9b. Safe-cleanup RPC for deleting a cash_adjustment when the FK
+-- is RESTRICT. Cleans up investor_payments first, then deletes the
+-- cash_adjustment which cascades to loan_contributions / loan_repayments.
+-- ============================================================
+create or replace function delete_cash_adjustment(p_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  delete from investor_payments where cash_adjustment_id = p_id;
+  delete from cash_adjustments where id = p_id;
+end;
+$$;
+
+grant execute on function delete_cash_adjustment(uuid) to authenticated, service_role;
+
+-- ============================================================
+-- 9c. Positive-amount CHECK on loan_repayments (Audit Phase B)
+-- ============================================================
+alter table loan_repayments drop constraint if exists check_repayment_positive_value;
+alter table loan_repayments add constraint check_repayment_positive_value check (amount > 0);
 
 -- ============================================================
 -- 10. RPC: create_profit_record — supports custom split distributions

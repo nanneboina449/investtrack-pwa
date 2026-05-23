@@ -245,14 +245,19 @@ export async function createLoan({ adjustment, contributions }) {
   return adj
 }
 
-export async function recordRepayment({ loanId, amount, type, toProjectId, date, notes }) {
+export async function recordRepayment({ loanId, amount, type, toProjectId, date, notes, destInvestorMap }) {
+  // Audit Phase B: when type=project_adjustment and we know the
+  // contributor → destination investor mapping by UUID, pass it through
+  // so the RPC can skip name matching. The frontend builds this map by
+  // joining loan_contributions to the destination project's investors.
   const { error } = await supabase.rpc('process_loan_repayment', {
-    p_loan_id:        loanId,
-    p_amount:         amount,
-    p_type:           type,
-    p_to_project_id:  toProjectId ?? null,
-    p_date:           isoDate(date),
-    p_notes:          notes ?? null
+    p_loan_id:            loanId,
+    p_amount:             amount,
+    p_type:               type,
+    p_to_project_id:      toProjectId ?? null,
+    p_date:               isoDate(date),
+    p_notes:              notes ?? null,
+    p_dest_investor_map:  destInvestorMap ?? null,
   })
   if (error) throw error
 }
@@ -293,12 +298,12 @@ export async function updateCashAdjustment(id, values) {
 }
 
 export async function deleteCashAdjustment(id) {
-  // Audit BUG 2 fix: investor_payments now carries cash_adjustment_id
-  // with ON DELETE CASCADE. We just delete the cash_adjustment and
-  // Postgres cleans up every linked payment row atomically — no more
-  // best-effort matching by amount+date+contributor.
-  // (loan_contributions and loan_repayments also cascade via their FKs.)
-  const { error } = await supabase.from('cash_adjustments').delete().eq('id', id)
+  // FK on investor_payments.cash_adjustment_id is now ON DELETE RESTRICT
+  // (Audit Phase B). The delete_cash_adjustment RPC does the explicit
+  // teardown inside a transaction: payments first, then the
+  // cash_adjustment itself (which cascades to loan_contributions and
+  // loan_repayments via their own FKs).
+  const { error } = await supabase.rpc('delete_cash_adjustment', { p_id: id })
   if (error) throw error
 }
 

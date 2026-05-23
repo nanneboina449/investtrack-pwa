@@ -1,6 +1,7 @@
 // src/pages/CashFlow.jsx
 import { useState } from 'react'
 import { useCashFlow, useLoans, useProjects, useInvestors, useAllInvestors, createLoan, recordRepayment, markSettled, reallocateInvestorPosition, updateLoan, updateCashAdjustment, deleteCashAdjustment } from '../hooks/useData'
+import { supabase } from '../lib/supabase'
 import { inr, isoDate } from '../lib/supabase'
 import { Sheet, Field, SegControl, Spinner, Empty, ProgressBar, useToast } from '../components/ui'
 
@@ -586,7 +587,32 @@ function RepaymentSheet({ loan, loanDetail, projects, onClose, onSaved }) {
     e.preventDefault()
     setSaving(true); setError(null)
     try {
-      await recordRepayment({ loanId: loan.id, amount: parseFloat(amount), type: repType, toProjectId: toProject || null, date, notes: notes || null })
+      // Audit Phase B: for project_adjustment repayments, pre-resolve
+      // the contributor → destination-investor UUID map so the RPC
+      // doesn't fall back to name matching. loanDetail.contributions
+      // (from loan_summary view) carries names but not ids, so refetch
+      // loan_contributions directly to get the contributor UUIDs.
+      let destInvestorMap = null
+      if (repType === 'project_adjustment' && toProject) {
+        const [{ data: contribs }, { data: destInvs }] = await Promise.all([
+          supabase.from('loan_contributions').select('investor_id, investor_name').eq('loan_id', loan.id),
+          supabase.from('investors').select('id, name').eq('project_id', toProject),
+        ])
+        const norm = s => (s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+        if (contribs && destInvs) {
+          destInvestorMap = contribs.map(c => {
+            const match = destInvs.find(d => norm(d.name) === norm(c.investor_name))
+            return match
+              ? { contributor_id: c.investor_id, dest_investor_id: match.id }
+              : null
+          }).filter(Boolean)
+        }
+      }
+      await recordRepayment({
+        loanId: loan.id, amount: parseFloat(amount), type: repType,
+        toProjectId: toProject || null, date, notes: notes || null,
+        destInvestorMap,
+      })
       onSaved()
     } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
@@ -665,7 +691,13 @@ function RepaymentSheet({ loan, loanDetail, projects, onClose, onSaved }) {
         </div>
 
         <Field label={`Amount (₹) · max ${inr(outstanding)}`}>
-          <input className="input" type="number" max={outstanding} placeholder="0" value={amount} onChange={e => setAmount(e.target.value)} required />
+          <input className="input" type="number" placeholder="0" value={amount} onChange={e => setAmount(e.target.value)} required />
+          {repaidNow > outstanding + 0.5 && (
+            <p className="text-[11px] text-amber-700 bg-amber-50 rounded-lg px-2 py-1.5 mt-1.5">
+              ⚠ Repayment exceeds outstanding by {inr(repaidNow - outstanding)}. The loan will auto-settle but the
+              outstanding balance will go negative. Use Edit on the loan card if this was a typo.
+            </p>
+          )}
         </Field>
 
         {repType === 'project_adjustment' && (

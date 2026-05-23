@@ -303,10 +303,16 @@ Mutations: `createProject`, `updateProject`, `deleteProject`, `createInvestor`, 
 - ✅ **Audit 2.1 — Name-string matching in RPC**: `reallocate_investor_position` now takes an optional `p_dest_investor_id` UUID. The UI looks up the destination investor in the (already filtered) destination project dropdown and passes the UUID; name matching is fallback only.
 - ✅ **Audit 2.2 — Auto-scale trigger silently overwrites commitments**: The `projects_scale_investor_commitments` trigger is dropped. Scaling is now an explicit checkbox in EditProjectSheet (default ON), executing a batch `updateInvestor` after the project update — so the user actively confirms.
 
+### Resolved by the May 2026 Master Audit Phase B (`audit_phase_b_fixes.sql`)
+
+- ✅ **`cash_adjustment_id` FK switched to ON DELETE RESTRICT**: financial records can't be wiped by a stray DELETE on cash_adjustments. The Delete-loan UX still works via the new `delete_cash_adjustment(uuid)` RPC, which handles the explicit teardown order inside a transaction.
+- ✅ **Multi-leg repayment name-match closed**: `process_loan_repayment` now takes an optional `p_dest_investor_map` JSON parameter (array of `{contributor_id, dest_investor_id}` pairs). Frontend pre-resolves the mapping and passes it; name match remains only as a safety net.
+- ✅ **Over-repayment validation**: `loan_repayments.amount` now has a `CHECK (amount > 0)` constraint at the DB level, and the Record Repayment sheet displays an inline amber warning when the entered amount exceeds the outstanding balance.
+
 ### Still open
 
-- **Audit 2.3 — Hard delete cascades on investors / cash adjustments**. Deleting an investor still wipes their entire ledger history through FK CASCADE. For compliance-grade audit trails the right move is soft delete (`deleted_at` column + filter in every view). Documented as a future schema migration.
-- **`cash_adjustment_id` FK is ON DELETE CASCADE, not RESTRICT** (the Master Audit recommended RESTRICT). Kept as CASCADE intentionally so the existing "Delete loan" UX works one-click — the loan + its paired ledger rows clean up atomically. Switch to RESTRICT if you want to force manual cleanup of dependent rows first; documented as a design choice.
+- **Audit 2.3 — Hard delete cascades on investors**. Deleting an investor still wipes their entire ledger history through FK CASCADE. For compliance-grade audit trails the right move is soft delete (`deleted_at` column + filter in every view). Documented as a future schema migration.
+- **Audit Phase B — `share_contribution` immutability trigger declined**. The audit recommended a BEFORE UPDATE trigger that blocks edits to share_contribution payment rows. Declined intentionally: the Edit Payment sheet legitimately exists for correcting typos and adjusting historical amounts. Hard-blocking trades real UX for theoretical compliance gain. Documented design choice.
 - **No explicit Wallet table**. Wallet balance is currently derived (refunds-without-destination minus implied next contribution). For thousands of rows per investor this becomes a frontend bottleneck. Recommended: an `investor_wallets` table that INSERTS on external refund and DEBITs on next deployment.
 - **No explicit "exit investor" flow**. To exit cleanly today you record a refund + delete the investor. A dedicated "Exit Investor" sheet would do this atomically with a settlement preview.
 - **Project status = completed is soft-close**. Books stay editable unless the `tr_lock_completed_project_payments` trigger is enabled (commented out in section 11e — uncomment to switch on). A "Close & Settle" UI flow that refunds outstanding positions and freezes the project is the next layer up.
