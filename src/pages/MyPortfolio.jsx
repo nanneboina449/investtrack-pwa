@@ -58,17 +58,7 @@ export default function MyPortfolio() {
     )
   }
   if (!data || data.empty) {
-    return (
-      <div className="px-5 py-12">
-        <Empty
-          icon="🌱"
-          title="No investments yet"
-          sub={data?.identity
-            ? `No investor records found for ${data.identity.name ?? data.identity.email}. Ask a project owner to add you, or create your own project from the Projects tab.`
-            : 'Sign in to view your portfolio.'}
-        />
-      </div>
-    )
+    return <EmptyState data={data} />
   }
 
   return (
@@ -82,6 +72,18 @@ export default function MyPortfolio() {
           <p className="text-sm text-gray-500 mt-0.5">{data.identity.name}</p>
         )}
       </div>
+
+      {/* Name-mismatch hint — only when we had to relax to email-only.
+          The strict name+email rule failed, but email-only found records.
+          Surface this so the user can fix the underlying data drift. */}
+      {data.matchMode === 'loose-email-only' && (
+        <div className="mx-5 mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-[12px] text-amber-900">
+          <p className="font-semibold mb-0.5">Name mismatch — showing all records on {data.identity.email}</p>
+          <p className="text-amber-800">
+            Your profile name is "{data.identity.name ?? '—'}" but the investor records on your projects are under a different spelling. Edit one of them to match (or update your profile name in Settings) to switch to strict matching.
+          </p>
+        </div>
+      )}
 
       {/* Hero */}
       <Hero
@@ -325,6 +327,100 @@ function TimelineRow({ row }) {
       <p className={`font-mono font-semibold text-sm whitespace-nowrap ${moneyClass(row.amount, { neutralZero: false })}`}>
         {sign}{inr(Math.abs(Math.round(row.amount)))}
       </p>
+    </div>
+  )
+}
+
+// ── Empty state (no investor records match the logged-in user) ───
+// Three sub-cases handled below:
+//   1. User has NO investor records anywhere (no candidates by email)
+//      → suggest creating projects / asking owners to add them.
+//   2. User has candidates with this email but name didn't match strict
+//      → already shown as a hint above when matchMode='loose-email-only';
+//        this empty branch shouldn't trigger in that case because we use
+//        the loose match. Defensive copy still included.
+//   3. User owns projects but isn't listed as an investor on any of them
+//      → list the owned projects with a "Set up investor record" prompt.
+function EmptyState({ data }) {
+  const identity   = data?.identity
+  const owned      = data?.ownedProjects ?? []
+  const candidates = data?.candidatesWithEmail ?? []
+
+  return (
+    <div className="page-enter">
+      <div className="bg-white border-b border-gray-100 px-5 pt-14 pb-3 lg:pt-8">
+        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">
+          My Portfolio
+        </p>
+        {identity?.name && (
+          <p className="text-sm text-gray-500 mt-0.5">{identity.name}</p>
+        )}
+      </div>
+
+      <div className="px-5 py-8 space-y-5">
+        <div className="text-center">
+          <div className="text-5xl mb-4">🌱</div>
+          <p className="font-semibold text-gray-700 mb-1">No investor records yet</p>
+          <p className="text-sm text-gray-500 max-w-md mx-auto">
+            Your portfolio shows positions tied to <strong>your investor record</strong> on each project — not the projects you own. Add yourself as an investor on a project below to start tracking your share.
+          </p>
+        </div>
+
+        {/* Diagnostic — what we matched on */}
+        <div className="bg-gray-50 rounded-2xl border border-gray-200 p-4 text-[12px] text-gray-700">
+          <p className="font-semibold mb-2">What we searched for</p>
+          <div className="space-y-1 font-mono">
+            <p><span className="text-gray-500">email:</span> {identity?.email}</p>
+            <p><span className="text-gray-500">name :</span> {identity?.name ?? <em className="text-gray-400">(not set in profile)</em>}</p>
+          </div>
+          {candidates.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-200">
+              <p className="text-amber-800 font-semibold mb-1">⚠ We found {candidates.length} investor record{candidates.length === 1 ? '' : 's'} on this email, but the name didn't match:</p>
+              <ul className="list-disc list-inside ml-1 text-gray-700">
+                {candidates.map((n, i) => <li key={i} className="font-mono">{n}</li>)}
+              </ul>
+              <p className="mt-2 text-gray-600">
+                Edit one of these investor records (or your profile name in Settings) so they line up — then this page will populate.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Owned projects — surface even without an investor record */}
+        {owned.length > 0 && (
+          <section>
+            <h2 className="text-sm font-bold text-gray-900 mb-2">Projects you own</h2>
+            <p className="text-[12px] text-gray-500 mb-3">
+              You created these but aren't listed as an investor on them. Open a project and use the <strong>Investors → Add Investor</strong> action to add yourself.
+            </p>
+            <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 overflow-hidden">
+              {owned.map(p => (
+                <Link
+                  key={p.project_id}
+                  to={`/projects/${p.project_id}`}
+                  className="flex items-center justify-between px-4 py-3.5 hover:bg-gray-50 transition-colors"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-semibold text-gray-900 text-sm truncate">{p.name}</p>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 capitalize">
+                        {p.status}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-gray-400 text-lg">›</span>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {owned.length === 0 && candidates.length === 0 && (
+          <div className="text-center text-sm text-gray-500">
+            <p>Head to <Link to="/projects" className="text-brand-700 font-semibold underline">Projects</Link> to create your first project.</p>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

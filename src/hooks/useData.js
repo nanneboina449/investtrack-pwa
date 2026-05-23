@@ -944,33 +944,56 @@ export function useMyPortfolio() {
     const myName  = norm(user.user_metadata?.full_name)
     if (!myEmail) return null
 
-    // 2. Pull every investor row, then filter to the user's records.
-    // RLS already restricts to projects the user can see (owner +
-    // shared); we further filter to rows whose email (and name, when
-    // available) match the logged-in identity.
-    const [allInvestorsRes, projectsRes] = await Promise.all([
+    // 2. Pull every investor row + projects the user owns. RLS already
+    // restricts to projects the user can see; we further filter to rows
+    // whose email (and ideally name) match the logged-in identity.
+    const [allInvestorsRes, projectsRes, ownedProjectsRes] = await Promise.all([
       supabase.from('investors')
         .select('id, project_id, name, email, share_percent, amount_invested, is_deleted'),
-      supabase.from('my_projects').select('id, name, status'),
+      supabase.from('my_projects').select('id, name, status, total_value, our_stake_percent, user_id'),
+      // Projects this user owns (auth.uid matches projects.user_id). Used as
+      // a fallback display when they own projects but haven't added themselves
+      // as an investor — the empty state surfaces "Projects you own" with a
+      // prompt to set up an investor record, rather than a dead-end message.
+      supabase.from('projects').select('id, name, status').eq('user_id', user.id),
     ])
     if (allInvestorsRes.error) throw allInvestorsRes.error
 
     const projectMap = {}
     for (const p of (projectsRes.data ?? [])) projectMap[p.id] = p
+    const ownedProjects = ownedProjectsRes.data ?? []
 
-    const myRecords = (allInvestorsRes.data ?? []).filter(i => {
-      if (i.is_deleted) return false
-      if (norm(i.email) !== myEmail) return false
-      // If user has a name in metadata, require name match too. Otherwise
-      // (legacy accounts), accept any record with this email.
-      if (myName && norm(i.name) !== myName) return false
-      return true
-    })
+    // Three-tier matching:
+    //   1. strict — email AND name both match
+    //   2. loose  — email-only (when strict yields nothing)
+    //   3. none   — render empty state with diagnostic
+    // The user picked "exact name + email" but real-world data rarely has
+    // exact name parity (e.g. metadata says "Venkatesh Nanneboina" while
+    // the investor row says "Venkatesh"). We silently fall back to email-
+    // only and record which mode was used so the UI can show a soft hint.
+    const candidatesByEmail = (allInvestorsRes.data ?? []).filter(i =>
+      !i.is_deleted && norm(i.email) === myEmail
+    )
+    const strictMatches = candidatesByEmail.filter(i =>
+      !myName || norm(i.name) === myName
+    )
+    const myRecords = strictMatches.length > 0 ? strictMatches : candidatesByEmail
+    const matchMode = strictMatches.length > 0
+      ? (myName ? 'strict' : 'email-only-no-metadata-name')
+      : (candidatesByEmail.length > 0 ? 'loose-email-only' : 'none')
 
     if (myRecords.length === 0) {
+      // Surface owned projects + diagnostic so the user can see why
+      // nothing matched and act on it.
+      const distinctNames = [...new Set(candidatesByEmail.map(i => i.name))]
       return {
         identity: { email: user.email, name: user.user_metadata?.full_name ?? null },
         empty: true,
+        matchMode,
+        candidatesWithEmail: distinctNames,           // names found under this email (may be 0)
+        ownedProjects: ownedProjects.map(p => ({      // projects user owns but isn't an investor on
+          project_id: p.id, name: p.name, status: p.status,
+        })),
         runningBalance: 0, netReturn: 0, invested: 0, realizedProfit: 0, totalExpenses: 0,
         projects: [], loansGiven: [], loansReceived: [], timeline: [],
       }
@@ -1188,6 +1211,8 @@ export function useMyPortfolio() {
     return {
       identity: { email: user.email, name: user.user_metadata?.full_name ?? null },
       empty: false,
+      matchMode,                              // 'strict' | 'loose-email-only' | 'email-only-no-metadata-name'
+      ownedProjects: ownedProjects.map(p => ({ project_id: p.id, name: p.name, status: p.status })),
       runningBalance,
       netReturn: profitTotal - expenseTotal,
       invested: cashContributed - cashBack,  // net out of pocket
