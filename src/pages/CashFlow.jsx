@@ -268,13 +268,13 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
         // where this person exists, so the match should always succeed —
         // but we hard-error here too if it doesn't.
         const normalize = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ')
-        const srcName = investors.data.find(i => i.investor_id === form.from_investor_id)?.investor_name
-        const srcKey  = normalize(srcName)
+        const srcInvestorName = investors.data.find(i => i.investor_id === form.from_investor_id)?.investor_name
+        const srcKey  = normalize(srcInvestorName)
         const destInvestor = (allInvestorsHook.data ?? []).find(
           i => i.project_id === form.to_project_id && normalize(i.name) === srcKey
         )
         if (!destInvestor) {
-          throw new Error(`No investor named "${srcName}" on the destination project. Add them there first.`)
+          throw new Error(`No investor named "${srcInvestorName}" on the destination project. Add them there first.`)
         }
         // Run the atomic linked refund + top-up; also drop a marker row
         // on cash_adjustments so the reallocation appears in the timeline.
