@@ -149,6 +149,26 @@ export async function updateInvestor(id, values) {
   if (error) throw error
 }
 
+// Claim an investor record as belonging to the logged-in user by writing
+// the user's auth email onto that row. Used by the My Portfolio empty
+// state — instead of fuzzy-matching by name forever, the user explicitly
+// says "this investor row is me" and the next portfolio reload picks it
+// up via the strict email match.
+//
+// RLS only allows project owners to update investor rows on their own
+// projects, which is exactly the set the empty state offers as claim
+// candidates — anything outside that scope would fail at the policy
+// layer anyway.
+export async function linkInvestorToMyEmail(investorId) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user?.email) throw new Error('Not signed in')
+  const { error } = await supabase
+    .from('investors')
+    .update({ email: user.email })
+    .eq('id', investorId)
+  if (error) throw error
+}
+
 // ── Profit Records ────────────────────────────────────────────
 export function useProfitRecords(projectId) {
   return useFetch(async () => {
@@ -702,6 +722,35 @@ export function useAllInvestors() {
   })
 }
 
+// Manage Investors page hook — fetches every investor record (including
+// email, soft-delete status) and joins the project name client-side so
+// the UI can group by project. Includes soft-deleted rows when
+// includeDeleted=true (the Investors page has a toggle for that).
+export function useAllInvestorsAdmin(includeDeleted = false) {
+  return useFetch(async () => {
+    const [invsRes, projsRes] = await Promise.all([
+      supabase.from('investors')
+        .select('id, project_id, name, email, share_percent, amount_invested, is_deleted, created_at')
+        .order('name'),
+      supabase.from('my_projects').select('id, name, status'),
+    ])
+    if (invsRes.error) throw invsRes.error
+    const projById = {}
+    for (const p of (projsRes.data ?? [])) projById[p.id] = p
+
+    return (invsRes.data ?? [])
+      .filter(i => includeDeleted ? true : !i.is_deleted)
+      .map(i => ({
+        ...i,
+        project_name:   projById[i.project_id]?.name   ?? '(no access)',
+        project_status: projById[i.project_id]?.status ?? null,
+      }))
+      // Drop rows for projects RLS hid from us — those won't appear in
+      // my_projects so project_name comes back '(no access)'.
+      .filter(i => i.project_name !== '(no access)')
+  }, [includeDeleted])
+}
+
 // ── Cross-project investor summary (for the owner's dashboard) ──
 // Aggregates every investor record visible to the user, groups by name,
 // and computes their consolidated position across all projects.
@@ -963,35 +1012,65 @@ export function useMyPortfolio() {
     for (const p of (projectsRes.data ?? [])) projectMap[p.id] = p
     const ownedProjects = ownedProjectsRes.data ?? []
 
-    // Three-tier matching:
-    //   1. strict — email AND name both match
-    //   2. loose  — email-only (when strict yields nothing)
-    //   3. none   — render empty state with diagnostic
-    // The user picked "exact name + email" but real-world data rarely has
-    // exact name parity (e.g. metadata says "Venkatesh Nanneboina" while
-    // the investor row says "Venkatesh"). We silently fall back to email-
-    // only and record which mode was used so the UI can show a soft hint.
-    const candidatesByEmail = (allInvestorsRes.data ?? []).filter(i =>
+    // Two-tier email-based matching (no name-only auto-match — too risky
+    // when two distinct people on the platform share a name):
+    //   1. strict        — email AND name both match (preferred)
+    //   2. email-only    — drop the name check (handles name drift on a
+    //                      record that already has the user's email)
+    //   3. none          — render empty state with a CLAIM list: every
+    //                      investor row on a project the user owns, with
+    //                      a "This is me" button that writes the user's
+    //                      email onto that row. Once claimed, the next
+    //                      reload hits the strict-match path.
+    //
+    // The claim flow replaces fuzzy matching with an explicit user action,
+    // matching Phase C's "explicit > implicit" principle at the UI layer.
+    const ownedProjectIds = new Set(ownedProjects.map(p => p.id))
+    const allInvs = allInvestorsRes.data ?? []
+    const candidatesByEmail = allInvs.filter(i =>
       !i.is_deleted && norm(i.email) === myEmail
     )
     const strictMatches = candidatesByEmail.filter(i =>
       !myName || norm(i.name) === myName
     )
-    const myRecords = strictMatches.length > 0 ? strictMatches : candidatesByEmail
-    const matchMode = strictMatches.length > 0
-      ? (myName ? 'strict' : 'email-only-no-metadata-name')
-      : (candidatesByEmail.length > 0 ? 'loose-email-only' : 'none')
+
+    let myRecords = []
+    let matchMode = 'none'
+    if (strictMatches.length > 0) {
+      myRecords = strictMatches
+      matchMode = myName ? 'strict' : 'email-only-no-metadata-name'
+    } else if (candidatesByEmail.length > 0) {
+      myRecords = candidatesByEmail
+      matchMode = 'loose-email-only'
+    }
 
     if (myRecords.length === 0) {
-      // Surface owned projects + diagnostic so the user can see why
-      // nothing matched and act on it.
-      const distinctNames = [...new Set(candidatesByEmail.map(i => i.name))]
+      // Claim candidates: every investor row on a project the user owns
+      // that isn't already linked to a different live user's email. The
+      // user can pick whichever row is "them" and click to attach their
+      // email. We sort so name-matches float to the top.
+      const claimCandidates = allInvs
+        .filter(i => !i.is_deleted && ownedProjectIds.has(i.project_id))
+        .map(i => ({
+          id: i.id,
+          project_id: i.project_id,
+          project_name: ownedProjects.find(p => p.id === i.project_id)?.name ?? '?',
+          name: i.name,
+          share_percent: Number(i.share_percent || 0),
+          current_email: i.email ?? null,
+          name_matches: myName && norm(i.name) === myName,
+        }))
+        .sort((a, b) =>
+          (b.name_matches ? 1 : 0) - (a.name_matches ? 1 : 0)
+          || a.project_name.localeCompare(b.project_name)
+        )
+
       return {
         identity: { email: user.email, name: user.user_metadata?.full_name ?? null },
         empty: true,
         matchMode,
-        candidatesWithEmail: distinctNames,           // names found under this email (may be 0)
-        ownedProjects: ownedProjects.map(p => ({      // projects user owns but isn't an investor on
+        claimCandidates,                              // investor rows on owned projects
+        ownedProjects: ownedProjects.map(p => ({      // projects (so we can still link out)
           project_id: p.id, name: p.name, status: p.status,
         })),
         runningBalance: 0, netReturn: 0, invested: 0, realizedProfit: 0, totalExpenses: 0,
