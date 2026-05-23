@@ -14,9 +14,9 @@
 // Scoping: all data comes from useMyPortfolio() which matches on
 // email + name. Other users' investments are not visible here even if
 // the logged-in user is a project owner.
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useMyPortfolio } from '../hooks/useData'
+import { useMyPortfolio, linkInvestorToMyEmail } from '../hooks/useData'
 import { inr } from '../lib/supabase'
 import { Spinner, Empty } from '../components/ui'
 import {
@@ -332,19 +332,38 @@ function TimelineRow({ row }) {
 }
 
 // ── Empty state (no investor records match the logged-in user) ───
-// Three sub-cases handled below:
-//   1. User has NO investor records anywhere (no candidates by email)
-//      → suggest creating projects / asking owners to add them.
-//   2. User has candidates with this email but name didn't match strict
-//      → already shown as a hint above when matchMode='loose-email-only';
-//        this empty branch shouldn't trigger in that case because we use
-//        the loose match. Defensive copy still included.
-//   3. User owns projects but isn't listed as an investor on any of them
-//      → list the owned projects with a "Set up investor record" prompt.
+//
+// Shows a CLAIM list of investor records on projects the user owns.
+// Each row has a "This is me" button that writes the user's auth email
+// onto that investor row via linkInvestorToMyEmail(). Once claimed, the
+// next portfolio reload picks it up via strict email match.
+//
+// This replaces fuzzy/heuristic matching with an explicit user action —
+// matching Phase C's "explicit > implicit" principle at the UI layer.
 function EmptyState({ data }) {
   const identity   = data?.identity
   const owned      = data?.ownedProjects ?? []
-  const candidates = data?.candidatesWithEmail ?? []
+  const claimables = data?.claimCandidates ?? []
+  const [busy, setBusy]     = useState(null)        // id of row currently being claimed
+  const [error, setError]   = useState(null)
+  const [claimed, setClaimed] = useState({})        // {id: true} for rows just claimed (visual feedback)
+
+  const handleClaim = async (investorId) => {
+    setBusy(investorId); setError(null)
+    try {
+      await linkInvestorToMyEmail(investorId)
+      setClaimed(c => ({ ...c, [investorId]: true }))
+      // Hard refresh so the portfolio re-fetches and switches to the
+      // populated view. (We could just reload() the hook but a full
+      // refresh also picks up any other UI state that depended on the
+      // previous data.)
+      setTimeout(() => window.location.reload(), 600)
+    } catch (e) {
+      setError(`${e.message} — make sure you have edit access to that project.`)
+    } finally {
+      setBusy(null)
+    }
+  }
 
   return (
     <div className="page-enter">
@@ -360,38 +379,94 @@ function EmptyState({ data }) {
       <div className="px-5 py-8 space-y-5">
         <div className="text-center">
           <div className="text-5xl mb-4">🌱</div>
-          <p className="font-semibold text-gray-700 mb-1">No investor records yet</p>
+          <p className="font-semibold text-gray-700 mb-1">No investor records linked to your email yet</p>
           <p className="text-sm text-gray-500 max-w-md mx-auto">
-            Your portfolio shows positions tied to <strong>your investor record</strong> on each project — not the projects you own. Add yourself as an investor on a project below to start tracking your share.
+            We couldn't find any investor records on <strong className="font-mono">{identity?.email}</strong>.
+            If one of these records on your projects is you, click <strong>"This is me"</strong> to attach your email and start tracking your portfolio.
           </p>
         </div>
 
-        {/* Diagnostic — what we matched on */}
-        <div className="bg-gray-50 rounded-2xl border border-gray-200 p-4 text-[12px] text-gray-700">
-          <p className="font-semibold mb-2">What we searched for</p>
-          <div className="space-y-1 font-mono">
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {/* Claim list — investor records on owned projects */}
+        {claimables.length > 0 && (
+          <section>
+            <h2 className="text-sm font-bold text-gray-900 mb-2">
+              Investor records on your projects
+            </h2>
+            <p className="text-[12px] text-gray-500 mb-3">
+              {identity?.name && (
+                <>Records that match your profile name <strong>"{identity.name}"</strong> are highlighted and listed first. </>
+              )}
+              Click "This is me" on the row that's actually you — we'll attach your email so future loads find you instantly.
+            </p>
+            <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 overflow-hidden">
+              {claimables.map(c => {
+                const isClaimed = !!claimed[c.id]
+                const isBusy = busy === c.id
+                return (
+                  <div key={c.id} className={`px-4 py-3 ${c.name_matches ? 'bg-emerald-50/40' : ''}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-semibold text-gray-900 text-sm truncate">{c.name}</p>
+                          {c.name_matches && (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-fintech-green text-white">
+                              Name matches
+                            </span>
+                          )}
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                            {c.share_percent}%
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-gray-500 mt-0.5 truncate">
+                          on <strong>{c.project_name}</strong>
+                          {c.current_email
+                            ? <> • current email: <span className="font-mono">{c.current_email}</span></>
+                            : <> • <em>no email set</em></>}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleClaim(c.id)}
+                        disabled={isBusy || isClaimed}
+                        className={`text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap transition-colors
+                          ${isClaimed
+                            ? 'bg-fintech-green text-white'
+                            : isBusy
+                              ? 'bg-gray-200 text-gray-500'
+                              : 'bg-brand-50 text-brand-900 hover:bg-brand-100'}`}
+                      >
+                        {isClaimed ? '✓ Linked' : isBusy ? 'Linking…' : 'This is me'}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* Diagnostic — what we matched on (collapsed at the bottom) */}
+        <details className="bg-gray-50 rounded-2xl border border-gray-200 px-4 py-3 text-[12px] text-gray-700">
+          <summary className="font-semibold cursor-pointer select-none">Diagnostic — what we searched for</summary>
+          <div className="mt-3 space-y-1 font-mono">
             <p><span className="text-gray-500">email:</span> {identity?.email}</p>
             <p><span className="text-gray-500">name :</span> {identity?.name ?? <em className="text-gray-400">(not set in profile)</em>}</p>
           </div>
-          {candidates.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-gray-200">
-              <p className="text-amber-800 font-semibold mb-1">⚠ We found {candidates.length} investor record{candidates.length === 1 ? '' : 's'} on this email, but the name didn't match:</p>
-              <ul className="list-disc list-inside ml-1 text-gray-700">
-                {candidates.map((n, i) => <li key={i} className="font-mono">{n}</li>)}
-              </ul>
-              <p className="mt-2 text-gray-600">
-                Edit one of these investor records (or your profile name in Settings) so they line up — then this page will populate.
-              </p>
-            </div>
-          )}
-        </div>
+        </details>
 
-        {/* Owned projects — surface even without an investor record */}
-        {owned.length > 0 && (
+        {/* Owned projects fallback — when there are no investor records to claim
+            (e.g. user owns projects but hasn't added any investors yet) */}
+        {claimables.length === 0 && owned.length > 0 && (
           <section>
             <h2 className="text-sm font-bold text-gray-900 mb-2">Projects you own</h2>
             <p className="text-[12px] text-gray-500 mb-3">
-              You created these but aren't listed as an investor on them. Open a project and use the <strong>Investors → Add Investor</strong> action to add yourself.
+              You created these but they don't have any investor records yet. Open a project and use the <strong>Investors → Add Investor</strong> action to add yourself with this email.
             </p>
             <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 overflow-hidden">
               {owned.map(p => (
@@ -415,7 +490,7 @@ function EmptyState({ data }) {
           </section>
         )}
 
-        {owned.length === 0 && candidates.length === 0 && (
+        {claimables.length === 0 && owned.length === 0 && (
           <div className="text-center text-sm text-gray-500">
             <p>Head to <Link to="/projects" className="text-brand-700 font-semibold underline">Projects</Link> to create your first project.</p>
           </div>
