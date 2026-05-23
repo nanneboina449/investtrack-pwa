@@ -44,6 +44,13 @@ create index if not exists investors_is_deleted_idx on investors(is_deleted);
 comment on column investors.is_deleted is
   'Soft-delete flag. Hard delete via FK was switched to RESTRICT in Phase C to preserve ledger history. UI hides is_deleted=true rows from pickers.';
 
+-- 1d. Investor phone number (managed centrally on /investors screen)
+alter table investors
+  add column if not exists phone text;
+
+comment on column investors.phone is
+  'Free-text phone number. Managed centrally in the /investors screen — when edited there, the update is broadcast to every investor row sharing the same normalized name so a person has consistent contact details across projects.';
+
 -- ============================================================
 -- 2. NEW TABLES
 -- ============================================================
