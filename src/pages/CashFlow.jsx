@@ -260,11 +260,28 @@ function AddTransactionSheet({ open, onClose, projects, onSaved }) {
     setSaving(true); setError(null)
     try {
       if (isReallocation) {
+        // Master Audit Phase C — Item 3: the RPC no longer accepts a
+        // null destination investor (no name-string fallback). Resolve
+        // the destination investor UUID up front by matching the
+        // source investor's name to one on the destination project.
+        // The destination dropdown above is already filtered to projects
+        // where this person exists, so the match should always succeed —
+        // but we hard-error here too if it doesn't.
+        const normalize = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+        const srcName = investors.data.find(i => i.investor_id === form.from_investor_id)?.investor_name
+        const srcKey  = normalize(srcName)
+        const destInvestor = (allInvestorsHook.data ?? []).find(
+          i => i.project_id === form.to_project_id && normalize(i.name) === srcKey
+        )
+        if (!destInvestor) {
+          throw new Error(`No investor named "${srcName}" on the destination project. Add them there first.`)
+        }
         // Run the atomic linked refund + top-up; also drop a marker row
         // on cash_adjustments so the reallocation appears in the timeline.
         await reallocateInvestorPosition({
           sourceInvestorId: form.from_investor_id,
           destProjectId:    form.to_project_id,
+          destInvestorId:   destInvestor.id,
           amount:           loanAmount,
           date:             form.adjustment_date,
           notes:            form.description || null,

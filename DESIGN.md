@@ -123,13 +123,13 @@ If `p_distributions` is null, auto-creates proportional rows. Otherwise inserts 
 
 Records a repayment and distributes proportionally to contributors. When `p_type='project_adjustment'`, also creates `top_up` payments on the destination project for each contributor.
 
-**Destination matching** — when `p_dest_investor_map` is supplied as a JSON array of `{contributor_id, dest_investor_id}` pairs, the RPC uses those UUIDs directly (Master Audit Phase B). When null, falls back to case + whitespace-insensitive name match.
+**Destination matching** — caller MUST supply `p_dest_investor_map` as a JSON array of `{contributor_id, dest_investor_id}` pairs when `p_type='project_adjustment'`. The RPC raises `Compliance Violation: p_dest_investor_map is required...` if missing (Master Audit Phase C — Item 3, name-string fallback removed). Cash repayments (`p_type='cash'`) don't need a map. Contributors absent from the map are silently skipped — the UI is responsible for completeness.
 
 Auto-settles when total repaid ≥ principal × (1 + interest%/100).
 
 ### `reallocate_investor_position(p_source_investor_id, p_dest_project_id, p_amount, p_date, p_notes, p_dest_investor_id uuid)`
 
-Atomic refund + top-up between projects. When `p_dest_investor_id` is provided (UUID), uses it directly (Master Audit 2.1). When null, falls back to name matching. Used by both the Investors tab "⇄ Move" and the Cash Flow Reallocation form.
+Atomic refund + top-up between projects. Caller MUST supply `p_dest_investor_id` (the destination investor's UUID on `p_dest_project_id`). The RPC raises `Compliance Violation: p_dest_investor_id is required...` if null (Master Audit Phase C — Item 3, name-string fallback removed). Used by both the Investors tab "⇄ Move" and the Cash Flow Reallocation form — both surfaces resolve the UUID up front from a filtered dropdown.
 
 ### `transfer_funds_as_loan(p_source_investor_id, p_dest_investor_id, p_amount, p_interest_pct, p_date, p_notes)`
 
@@ -147,6 +147,7 @@ Safe-cleanup teardown of a cash_adjustment when the `cash_adjustment_id` FK is R
 |---|---|---|
 | `expenses_to_payment` | AFTER INSERT on `project_expenses` | If `paid_by_investor_id` is set, auto-creates an `expense_paid` payment on the investor's ledger |
 | `investors_name_sync` | AFTER UPDATE OF name on `investors` | Propagates the new name to `loan_contributions.investor_name` and `repayment_distributions.investor_name` (denormalized text fields) |
+| `tr_block_over_repayment` | BEFORE INSERT on `loan_repayments` | **Master Audit Phase C — Item 2.** Aborts the insert when `Σ existing repayments + NEW.amount > total_due + 0.01`. `total_due = round(ca.amount × (1 + interest%/100), 2)`. The 1-paise tolerance absorbs round-trip rounding; anything material gets the explicit `Repayment of ₹X would exceed outstanding...` error. |
 
 **Dropped** — `projects_scale_investor_commitments` was removed per Master Audit 2.2. The scaling function `scale_investor_commitments_on_project_change()` is still defined (so older deployments don't error), but the trigger binding is gone. Investor commitment scaling is now an explicit checkbox in EditProjectSheet — see section 7 (Project detail).
 
@@ -156,9 +157,9 @@ Safe-cleanup teardown of a cash_adjustment when the `cash_adjustment_id` FK is R
 
 | Parent → Child | Behavior |
 |---|---|
-| `investors` → `investor_payments` | CASCADE |
-| `investors` → `loan_contributions` | CASCADE |
-| `investors` → `profit_distributions` | CASCADE |
+| **`investors` → `investor_payments`** | **RESTRICT** (Master Audit Phase C — Item 4). Hard-delete falls back to soft-delete via `investors.is_deleted = true` (handled in `deleteInvestor()`). |
+| **`investors` → `loan_contributions`** | **RESTRICT** (Master Audit Phase C — Item 4). Same fallback. |
+| **`investors` → `profit_distributions`** | **RESTRICT** (Master Audit Phase C — Item 4). Same fallback. |
 | `profit_records` → `profit_distributions` | CASCADE |
 | `project_expenses` → `investor_payments.expense_id` | SET NULL |
 | **`cash_adjustments` → `investor_payments.cash_adjustment_id`** | **RESTRICT** (Master Audit Phase B). Use `delete_cash_adjustment` RPC for safe teardown. |
@@ -172,7 +173,9 @@ Safe-cleanup teardown of a cash_adjustment when the `cash_adjustment_id` FK is R
 - `profit_records.amount` (any sign allowed; expense vs profit semantics is in the value)
 - `project_expenses.amount > 0`
 - `loan_repayments.amount > 0` (Master Audit Phase B)
+- `loan_repayments` row-level guard via `tr_block_over_repayment` trigger (Master Audit Phase C — Item 2) — blocks cumulative repayments beyond `total_due + 0.01`, which a per-row CHECK can't express
 - `investors.share_percent > 0 AND <= 100`
+- `investors.is_deleted boolean default false` (Master Audit Phase C — Item 4) — soft-delete flag for investors with ledger dependencies
 
 ---
 
@@ -273,10 +276,11 @@ Sections inside it:
 
 | § | What |
 |---|---|
-| 1 | Column additions: `interest_rate_percent` on `cash_adjustments`, `paid_by_investor_id` on `project_expenses` |
+| 1 | Column additions: `interest_rate_percent` on `cash_adjustments`, `paid_by_investor_id` on `project_expenses`, **`is_deleted` on `investors` (Phase C — Item 4)** |
 | 2a | New table `investor_payments` |
 | 2b | Cross-project link columns on `investor_payments` (source/destination project + investor) |
 | 2c | `cash_adjustment_id` link with **ON DELETE RESTRICT** (Master Audit Phase B). New table `profit_distributions`. |
+| 2d | **`investors` → ledger FKs switched to ON DELETE RESTRICT (Phase C — Item 4)** — `investor_payments`, `loan_contributions`, `profit_distributions` all now refuse hard delete of an investor with history. |
 | 3 | Drop legacy auto-payment triggers that conflated commitment with paid |
 | 4a | Trigger `expenses_to_payment` — expense paid by investor → auto-payment row |
 | 4b | Function `scale_investor_commitments_on_project_change` retained; **trigger binding DROPPED** per Master Audit 2.2 |
@@ -288,11 +292,12 @@ Sections inside it:
 | 8a | View `my_projects` — subquery-based to avoid Cartesian fanout |
 | 8b | View `project_summary` — same subquery treatment |
 | 8c | View `loan_summary` — with `interest_amount`, `total_due_with_interest` |
-| 9 | RPC `process_loan_repayment(loan, amount, type, to_project, date, notes, **dest_investor_map**)` — interest + project_adjustment + UUID map (Phase B) with name match fallback |
+| 9 | RPC `process_loan_repayment(loan, amount, type, to_project, date, notes, **dest_investor_map**)` — interest + project_adjustment + UUID map. **Phase C: name-string fallback removed — hard-aborts when map missing for project_adjustment.** |
 | 9b | RPC `delete_cash_adjustment(uuid)` — safe teardown for the RESTRICT FK |
 | 9c | `CHECK (amount > 0)` on `loan_repayments` |
+| 9d | **Trigger `tr_block_over_repayment` (Phase C — Item 2)** — BEFORE INSERT on `loan_repayments`, raises when `Σ repayments + NEW.amount > total_due + 0.01` |
 | 10 | RPC `create_profit_record(project, amount, date, notes, distributions json)` |
-| 11 | RPC `reallocate_investor_position(source, dest_project, amount, date, notes, **dest_investor_id**)` — UUID-aware (Audit 2.1) |
+| 11 | RPC `reallocate_investor_position(source, dest_project, amount, date, notes, **dest_investor_id**)` — UUID-aware. **Phase C: name-string fallback removed — hard-aborts when `p_dest_investor_id` is null.** |
 | 11b | RPC `transfer_funds_as_loan(source, dest, amount, interest_pct, date, notes)` — inter-investor lending |
 | 11c | Backfill `cash_adjustment_id` on historical inter-investor loan payments |
 | 11d | View `my_investments` — CTE that reads `profit_distributions` + ledger (custom-split-aware) |
@@ -306,6 +311,7 @@ Sections inside it:
 | `audit_fixes.sql` | First audit: `cash_adjustment_id` column + CASCADE, `my_investments` rewrite, loan-orphan + borrower-inflation fixes |
 | `audit_master_fixes.sql` | Master Audit Section 2: UUID match in `reallocate_investor_position`, drop auto-scale commitments trigger |
 | `audit_phase_b_fixes.sql` | Master Audit Phase B: RESTRICT FK + `delete_cash_adjustment` RPC, UUID map for `process_loan_repayment`, positive-amount CHECK on loan_repayments |
+| `audit_phase_c_fixes.sql` | Master Audit Phase C: `investors.is_deleted` flag + RESTRICT FKs on ledger tables, `tr_block_over_repayment` trigger, hard-abort in both name-resolving RPCs |
 
 You can run the standalone files against a live DB (they detect existing state), or simply re-run `investtrack_full_setup.sql` which has every change folded in.
 
@@ -353,18 +359,23 @@ Mutations: `createProject`, `updateProject`, `deleteProject`, `createInvestor`, 
 ### Resolved by the May 2026 Master Audit Phase B (`audit_phase_b_fixes.sql`)
 
 - ✅ **`cash_adjustment_id` FK switched to ON DELETE RESTRICT**: financial records can't be wiped by a stray DELETE on cash_adjustments. The Delete-loan UX still works via the new `delete_cash_adjustment(uuid)` RPC, which handles the explicit teardown order inside a transaction.
-- ✅ **Multi-leg repayment name-match closed**: `process_loan_repayment` now takes an optional `p_dest_investor_map` JSON parameter (array of `{contributor_id, dest_investor_id}` pairs). Frontend pre-resolves the mapping and passes it; name match remains only as a safety net.
-- ✅ **Over-repayment validation**: `loan_repayments.amount` now has a `CHECK (amount > 0)` constraint at the DB level, and the Record Repayment sheet displays an inline amber warning when the entered amount exceeds the outstanding balance.
+- ✅ **Multi-leg repayment name-match closed**: `process_loan_repayment` now takes a `p_dest_investor_map` JSON parameter (array of `{contributor_id, dest_investor_id}` pairs). Frontend pre-resolves the mapping and passes it. (Phase C made this map **mandatory** for project_adjustment.)
+- ✅ **Over-repayment validation**: `loan_repayments.amount` now has a `CHECK (amount > 0)` constraint at the DB level, and the Record Repayment sheet displays an inline amber warning when the entered amount exceeds the outstanding balance. (Phase C added a row-level trigger that hard-blocks cumulative overruns — see below.)
+
+### Resolved by the May 2026 Master Audit Phase C (`audit_phase_c_fixes.sql`)
+
+- ✅ **Item 1 — Stale CALCULATIONS.md sections 1.2 and 17.6**. Section 1.2 now states "Commitments are static unless explicitly rescaled via the EditProjectSheet checkbox" and references the dropped trigger as deprecated. Section 17.6 was rewritten to describe the new Phase C name-match removal, replacing the orphaned auto-scale paragraph.
+- ✅ **Item 2 — Over-repayment row-level enforcement**. The CHECK constraint only blocks zero/negative; a BEFORE INSERT trigger `tr_block_over_repayment` on `loan_repayments` now hard-aborts when `Σ existing repayments + NEW.amount > total_due + 0.01`. The 1-paise tolerance absorbs round-trip rounding noise; anything material raises an explicit error pointing the user at the loan principal/interest fields.
+- ✅ **Item 3 — Name-string fallback removed from RPCs**. Both `reallocate_investor_position(... p_dest_investor_id)` and `process_loan_repayment(... p_dest_investor_map)` now hard-abort with a `Compliance Violation` error when called without the required UUID context. The UI surfaces (`MoveInvestorPositionSheet`, `RepaymentSheet`, `AddTransactionSheet` reallocation) already had filtered dropdowns; they were updated to resolve and pass the UUIDs up front rather than relying on the RPC's removed fallback.
+- ✅ **Item 4 — Investor hard delete preserved as RESTRICT + soft delete**. The FKs from `investor_payments`, `loan_contributions`, and `profit_distributions` to `investors.id` are switched from CASCADE to RESTRICT. `investors` gains an `is_deleted boolean default false` column. `deleteInvestor()` attempts a hard delete first; on FK error `23503` it falls back to setting `is_deleted = true`. All investor pickers (`useInvestors`, `useAllInvestors`, `useAllInvestorsSummary`) filter `is_deleted = true` rows out so soft-deleted investors disappear from the UI while their ledger history remains queryable for audit.
 
 ### Still open
 
-- **Audit 2.3 — Hard delete cascades on investors**. Deleting an investor still wipes their entire ledger history through FK CASCADE. For compliance-grade audit trails the right move is soft delete (`deleted_at` column + filter in every view). Documented as a future schema migration.
 - **Audit Phase B — `share_contribution` immutability trigger declined**. The audit recommended a BEFORE UPDATE trigger that blocks edits to share_contribution payment rows. Declined intentionally: the Edit Payment sheet legitimately exists for correcting typos and adjusting historical amounts. Hard-blocking trades real UX for theoretical compliance gain. Documented design choice.
 - **No explicit Wallet table**. Wallet balance is currently derived (refunds-without-destination minus implied next contribution). For thousands of rows per investor this becomes a frontend bottleneck. Recommended: an `investor_wallets` table that INSERTS on external refund and DEBITs on next deployment.
-- **No explicit "exit investor" flow**. To exit cleanly today you record a refund + delete the investor. A dedicated "Exit Investor" sheet would do this atomically with a settlement preview.
+- **No explicit "exit investor" flow**. To exit cleanly today you record a refund + soft-delete the investor. A dedicated "Exit Investor" sheet would do this atomically with a settlement preview.
 - **Project status = completed is soft-close**. Books stay editable unless the `tr_lock_completed_project_payments` trigger is enabled (commented out in section 11e — uncomment to switch on). A "Close & Settle" UI flow that refunds outstanding positions and freezes the project is the next layer up.
-- **`investor_profit_summary` / `investor_running_balance` views** still can't be cleanly replaced via `CREATE OR REPLACE VIEW` due to dependent-view column-type lock. Worked around by reading `profit_distributions` directly in the frontend for custom-split-aware totals. The audit's recommendation — migrate aggregations to inline TVFs or materialized views with explicit refresh triggers — is a future cleanup.
-- **`process_loan_repayment` still uses name matching** when type=project_adjustment (to find contributor's counterpart on the destination project). Master Audit 2.1's recommendation to use UUID is partially addressed via `reallocate_investor_position`; doing the same for `process_loan_repayment` would require passing a per-contributor destination map.
+- **`investor_profit_summary` / `investor_running_balance` views** still can't be cleanly replaced via `CREATE OR REPLACE VIEW` due to dependent-view column-type lock. Worked around by reading `profit_distributions` directly in the frontend for custom-split-aware totals, and by filtering soft-deleted investors with a parallel `is_deleted = true` query. The audit's recommendation — migrate aggregations to inline TVFs or materialized views with explicit refresh triggers — is a future cleanup.
 
 ---
 

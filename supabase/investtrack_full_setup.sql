@@ -31,6 +31,19 @@ alter table project_expenses
 
 create index if not exists project_expenses_paid_by_idx on project_expenses(paid_by_investor_id);
 
+-- 1c. Investor soft-delete flag (Master Audit Phase C — Item 4).
+-- We can't hard-delete an investor without breaking ledger history once
+-- the FKs from investor_payments / loan_contributions / profit_distributions
+-- become RESTRICT (below). The UI hides is_deleted=true rows from pickers
+-- and listings, but their historical rows remain queryable.
+alter table investors
+  add column if not exists is_deleted boolean default false;
+
+create index if not exists investors_is_deleted_idx on investors(is_deleted);
+
+comment on column investors.is_deleted is
+  'Soft-delete flag. Hard delete via FK was switched to RESTRICT in Phase C to preserve ledger history. UI hides is_deleted=true rows from pickers.';
+
 -- ============================================================
 -- 2. NEW TABLES
 -- ============================================================
@@ -82,6 +95,28 @@ alter table investor_payments
 
 create index if not exists investor_payments_cash_adj_idx on investor_payments(cash_adjustment_id);
 
+-- 2d. Phase C — switch investors → investor_payments FK from CASCADE to
+-- RESTRICT so hard-deleting an investor can't wipe their ledger history.
+-- Soft-delete via investors.is_deleted is the supported workflow.
+alter table investor_payments
+  drop constraint if exists investor_payments_investor_id_fkey;
+
+alter table investor_payments
+  add constraint investor_payments_investor_id_fkey
+  foreign key (investor_id)
+  references investors(id)
+  on delete restrict;
+
+-- Same protection for the other ledger tables that reference investors
+alter table loan_contributions
+  drop constraint if exists loan_contributions_investor_id_fkey;
+
+alter table loan_contributions
+  add constraint loan_contributions_investor_id_fkey
+  foreign key (investor_id)
+  references investors(id)
+  on delete restrict;
+
 -- 2c. profit_distributions table
 create table if not exists profit_distributions (
   id          uuid primary key default uuid_generate_v4(),
@@ -94,6 +129,17 @@ create table if not exists profit_distributions (
 
 create index if not exists profit_distributions_profit_idx   on profit_distributions(profit_id);
 create index if not exists profit_distributions_investor_idx on profit_distributions(investor_id);
+
+-- Phase C — RESTRICT FK on profit_distributions.investor_id so a
+-- historical distribution can't disappear when an investor is deleted.
+alter table profit_distributions
+  drop constraint if exists profit_distributions_investor_id_fkey;
+
+alter table profit_distributions
+  add constraint profit_distributions_investor_id_fkey
+  foreign key (investor_id)
+  references investors(id)
+  on delete restrict;
 
 -- ============================================================
 -- 3. DROP OLD AUTO-TRIGGERS THAT CONFLATED COMMITMENT WITH PAID
@@ -453,11 +499,16 @@ where ca.type in ('loan_given','loan_received')
 group by ca.id;
 
 -- ============================================================
--- 9. RPC: process_loan_repayment — interest + project_adjustment
--- + optional UUID map for destination matching (Audit Phase B fix).
--- Falls back to case+whitespace insensitive name match if no map.
+-- 9. RPC: process_loan_repayment — interest + project_adjustment.
+--
+-- Master Audit Phase C — Item 3: the case-insensitive name-match
+-- fallback was removed. When routing a repayment to another project
+-- (p_type = 'project_adjustment'), the caller MUST pass the explicit
+-- contributor_id → dest_investor_id mapping. Cash repayments don't
+-- need a map (no destination involved).
 -- ============================================================
 drop function if exists process_loan_repayment(uuid, numeric, text, uuid, date, text);
+drop function if exists process_loan_repayment(uuid, numeric, text, uuid, date, text, json);
 
 create or replace function process_loan_repayment(
   p_loan_id            uuid,
@@ -477,6 +528,15 @@ declare
   v_dist_amount       numeric;
   v_dest_investor_id  uuid;
 begin
+  -- Phase C: hard-abort if the destination map is missing for a
+  -- project_adjustment. The frontend resolves the contributor→destination
+  -- mapping before calling this RPC; if it can't, the operation is
+  -- ambiguous and we refuse rather than guessing by name.
+  if p_type = 'project_adjustment' and p_dest_investor_map is null then
+    raise exception
+      'Compliance Violation: p_dest_investor_map is required for project_adjustment repayments. Name-string fallback has been removed.';
+  end if;
+
   insert into loan_repayments (loan_id, amount, repayment_type, to_project_id, repayment_date, notes)
   values (p_loan_id, p_amount, p_type, p_to_project_id, p_date, p_notes)
   returning id into v_repayment_id;
@@ -498,25 +558,14 @@ begin
          v_contribution.project_id, v_dist_amount);
 
       if p_type = 'project_adjustment' and p_to_project_id is not null then
-        v_dest_investor_id := null;
-
-        -- Prefer explicit UUID map
-        if p_dest_investor_map is not null then
-          select (item->>'dest_investor_id')::uuid into v_dest_investor_id
-          from json_array_elements(p_dest_investor_map) item
-          where (item->>'contributor_id')::uuid = v_contribution.investor_id
-          limit 1;
-        end if;
-
-        -- Fall back to name match
-        if v_dest_investor_id is null then
-          select id into v_dest_investor_id
-          from investors
-          where project_id = p_to_project_id
-            and lower(regexp_replace(trim(name), '\s+', ' ', 'g'))
-                = lower(regexp_replace(trim(v_contribution.investor_name), '\s+', ' ', 'g'))
-          limit 1;
-        end if;
+        -- Resolve via UUID map only. Contributors not in the map are
+        -- SKIPPED (no name-match fallback). Caller is responsible for
+        -- completeness — the UI surfaces a "missing match" hint when
+        -- it can't build a full mapping.
+        select (item->>'dest_investor_id')::uuid into v_dest_investor_id
+        from json_array_elements(p_dest_investor_map) item
+        where (item->>'contributor_id')::uuid = v_contribution.investor_id
+        limit 1;
 
         if v_dest_investor_id is not null then
           insert into investor_payments
@@ -571,6 +620,49 @@ alter table loan_repayments drop constraint if exists check_repayment_positive_v
 alter table loan_repayments add constraint check_repayment_positive_value check (amount > 0);
 
 -- ============================================================
+-- 9d. block_over_repayment trigger (Master Audit Phase C — Item 2).
+-- The CHECK (amount > 0) only blocks zero/negative; it can't stop
+-- cumulative repayments from exceeding the principal + flat interest
+-- because the comparison spans rows. This BEFORE INSERT trigger
+-- aborts when the new row would push total_repaid past total_due.
+-- ============================================================
+create or replace function block_over_repayment()
+returns trigger
+language plpgsql
+as $$
+declare
+  v_total_due    numeric;
+  v_already_paid numeric;
+  v_new_total    numeric;
+begin
+  select round(amount * (1 + interest_rate_percent / 100::numeric), 2)
+    into v_total_due
+  from cash_adjustments
+  where id = NEW.loan_id;
+
+  select coalesce(sum(amount), 0) into v_already_paid
+  from loan_repayments
+  where loan_id = NEW.loan_id;
+
+  v_new_total := v_already_paid + NEW.amount;
+
+  -- 1 paise tolerance for round-trip rounding noise.
+  if v_new_total > v_total_due + 0.01 then
+    raise exception
+      'Repayment of ₹% would exceed outstanding (total due ₹%, already repaid ₹%, this would total ₹%). Edit the loan amount/interest first, or route the overpayment elsewhere.',
+      NEW.amount, v_total_due, v_already_paid, v_new_total;
+  end if;
+
+  return NEW;
+end;
+$$;
+
+drop trigger if exists tr_block_over_repayment on loan_repayments;
+create trigger tr_block_over_repayment
+  before insert on loan_repayments
+  for each row execute function block_over_repayment();
+
+-- ============================================================
 -- 10. RPC: create_profit_record — supports custom split distributions
 -- ============================================================
 create or replace function create_profit_record(
@@ -609,11 +701,16 @@ grant execute on function create_profit_record(uuid, numeric, date, text, json)
   to authenticated, service_role;
 
 -- ============================================================
--- 11. RPC: reallocate_investor_position — atomic linked refund + top_up
--- Audit 2.1: prefer immutable investor_id; name match is fallback only.
+-- 11. RPC: reallocate_investor_position — atomic linked refund + top_up.
+--
+-- Master Audit Phase C — Item 3: the name-match fallback was removed.
+-- Caller MUST pass p_dest_investor_id (the destination investor's UUID
+-- on the destination project). The frontend's MoveInvestorPositionSheet
+-- always has this UUID because it shows a dropdown of investors on the
+-- destination project.
 -- ============================================================
--- Drop the old signature first so the new one with extra param takes over cleanly
 drop function if exists reallocate_investor_position(uuid, uuid, numeric, date, text);
+drop function if exists reallocate_investor_position(uuid, uuid, numeric, date, text, uuid);
 
 create or replace function reallocate_investor_position(
   p_source_investor_id   uuid,
@@ -630,10 +727,15 @@ as $$
 declare
   v_source_project_id uuid;
   v_source_name       text;
-  v_dest_investor_id  uuid;
   v_refund_id         uuid;
   v_topup_id          uuid;
 begin
+  -- Phase C: hard-abort when caller didn't supply the destination UUID.
+  if p_dest_investor_id is null then
+    raise exception
+      'Compliance Violation: p_dest_investor_id is required. Name-string fallback has been removed.';
+  end if;
+
   select project_id, name into v_source_project_id, v_source_name
   from investors where id = p_source_investor_id;
   if v_source_project_id is null then raise exception 'Source investor not found'; end if;
@@ -642,21 +744,11 @@ begin
   end if;
   if p_amount <= 0 then raise exception 'Amount must be positive'; end if;
 
-  if p_dest_investor_id is not null then
-    if not exists (select 1 from investors where id = p_dest_investor_id and project_id = p_dest_project_id) then
-      raise exception 'Destination investor not found on destination project';
-    end if;
-    v_dest_investor_id := p_dest_investor_id;
-  else
-    select id into v_dest_investor_id
-    from investors
-    where project_id = p_dest_project_id
-      and lower(regexp_replace(trim(name), '\s+', ' ', 'g'))
-          = lower(regexp_replace(trim(v_source_name), '\s+', ' ', 'g'))
-    limit 1;
-    if v_dest_investor_id is null then
-      raise exception 'No investor named "%" on the destination project. Add them there first or pass p_dest_investor_id.', v_source_name;
-    end if;
+  if not exists (
+    select 1 from investors
+    where id = p_dest_investor_id and project_id = p_dest_project_id
+  ) then
+    raise exception 'Destination investor not found on destination project';
   end if;
 
   insert into investor_payments
@@ -665,14 +757,14 @@ begin
   values
     (p_source_investor_id, v_source_project_id, p_amount, 'refund',
      p_date, coalesce(p_notes, 'Reallocated to destination project'),
-     p_dest_project_id, v_dest_investor_id)
+     p_dest_project_id, p_dest_investor_id)
   returning id into v_refund_id;
 
   insert into investor_payments
     (investor_id, project_id, amount, payment_type, payment_date, notes,
      source_project_id, source_investor_id)
   values
-    (v_dest_investor_id, p_dest_project_id, p_amount, 'top_up',
+    (p_dest_investor_id, p_dest_project_id, p_amount, 'top_up',
      p_date, coalesce(p_notes, 'Reallocated from source project'),
      v_source_project_id, p_source_investor_id)
   returning id into v_topup_id;

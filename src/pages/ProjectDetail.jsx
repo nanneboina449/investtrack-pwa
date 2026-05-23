@@ -81,8 +81,18 @@ export default function ProjectDetail() {
 
   const handleDeleteInvestor = async (invId) => {
     if (!confirm('Remove this investor?')) return
-    try { await deleteInvestor(invId); investors.reload(); show('Investor removed') }
-    catch (e) { show(e.message, 'error') }
+    try {
+      const result = await deleteInvestor(invId)
+      investors.reload()
+      // Phase C: if the investor has ledger history, deleteInvestor falls
+      // back to a soft delete (is_deleted=true) so the FK isn't violated.
+      // Tell the user so they know the rows are still queryable.
+      if (result?.mode === 'soft') {
+        show('Investor archived — ledger history preserved')
+      } else {
+        show('Investor removed')
+      }
+    } catch (e) { show(e.message, 'error') }
   }
 
   const handleDeleteExpense = async (eid) => {
@@ -1339,16 +1349,21 @@ function MoveInvestorPositionSheet({ investor, projects = [], currentProjectId, 
     if (!amount || parseFloat(amount) <= 0) { setError('Amount must be positive'); return }
     setSaving(true); setError(null)
     try {
-      // Audit 2.1: pass the destination investor's UUID so the RPC doesn't
-      // have to rely on name matching. The dropdown is already filtered to
-      // valid destinations so we can look up the UUID locally.
+      // Master Audit Phase C — Item 3: the RPC no longer accepts a null
+      // destination investor. The dropdown is already filtered to valid
+      // destinations so we can look up the UUID locally — but if it
+      // somehow comes up empty, fail loudly here rather than hitting the
+      // RPC's hard-abort message.
       const destInv = (allInvestorsHook.data ?? []).find(i =>
         i.project_id === destProjectId && sourceNameKey === normalize(i.name)
       )
+      if (!destInv) {
+        throw new Error(`No investor named "${investor.investor_name}" on the destination project. Add them there first.`)
+      }
       await reallocateInvestorPosition({
         sourceInvestorId: investor.investor_id,
         destProjectId,
-        destInvestorId:   destInv?.id ?? null,  // RPC falls back to name match if null
+        destInvestorId:   destInv.id,
         amount: parseFloat(amount),
         date,
         notes: notes || null,
