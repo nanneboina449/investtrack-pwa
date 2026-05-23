@@ -96,13 +96,25 @@ export async function deleteProject(id) {
 export function useInvestors(projectId) {
   return useFetch(async () => {
     if (!projectId) return []
-    const { data, error } = await supabase
-      .from('investor_profit_summary')
-      .select('*')
-      .eq('project_id', projectId)
-      .order('amount_invested', { ascending: false })
-    if (error) throw error
-    return data
+    // The investor_profit_summary view doesn't expose is_deleted, so we
+    // fetch the soft-deleted ids in a parallel query and filter them out.
+    // (Master Audit Phase C — Item 4: hard delete is RESTRICTed at the
+    // FK level; soft-deleted investors must be hidden from all pickers.)
+    const [summaryRes, deletedRes] = await Promise.all([
+      supabase
+        .from('investor_profit_summary')
+        .select('*')
+        .eq('project_id', projectId)
+        .order('amount_invested', { ascending: false }),
+      supabase
+        .from('investors')
+        .select('id')
+        .eq('project_id', projectId)
+        .eq('is_deleted', true),
+    ])
+    if (summaryRes.error) throw summaryRes.error
+    const deletedIds = new Set((deletedRes.data ?? []).map(r => r.id))
+    return (summaryRes.data ?? []).filter(r => !deletedIds.has(r.investor_id))
   }, [projectId])
 }
 
@@ -111,9 +123,25 @@ export async function createInvestor(values) {
   if (error) throw error
 }
 
+// Phase C: investor.id is referenced by ledger tables (investor_payments,
+// loan_contributions, profit_distributions) with ON DELETE RESTRICT. A
+// hard delete would error and lose ledger history. Try a hard delete first
+// (clean case when investor has no rows yet); if the FK trips, fall back
+// to a soft delete by flipping is_deleted=true so the UI hides them.
 export async function deleteInvestor(id) {
-  const { error } = await supabase.from('investors').delete().eq('id', id)
-  if (error) throw error
+  const hard = await supabase.from('investors').delete().eq('id', id)
+  if (!hard.error) return { mode: 'hard' }
+
+  // 23503 = foreign_key_violation → dependents exist, switch to soft delete.
+  if (hard.error.code === '23503') {
+    const soft = await supabase
+      .from('investors')
+      .update({ is_deleted: true })
+      .eq('id', id)
+    if (soft.error) throw soft.error
+    return { mode: 'soft' }
+  }
+  throw hard.error
 }
 
 export async function updateInvestor(id, values) {
@@ -661,11 +689,13 @@ export function useInvestorLedger(investorIds) {
 
 // All investor records visible to the current user (across projects),
 // used for the inter-investor lending picker.
+// Phase C: filter out soft-deleted investors so pickers can't pick them.
 export function useAllInvestors() {
   return useFetch(async () => {
     const { data, error } = await supabase
       .from('investors')
       .select('id, project_id, name, share_percent, amount_invested')
+      .eq('is_deleted', false)
       .order('name')
     if (error) throw error
     return data ?? []
@@ -679,7 +709,10 @@ export function useAllInvestorsSummary() {
   return useFetch(async () => {
     const [investorsRes, paymentsRes, distributionsRes, expensesRes, projectsRes,
            loanContribsRes, loanCashRes, repayDistRes, loanRepayRes] = await Promise.all([
-      supabase.from('investors').select('id, project_id, name, share_percent, amount_invested'),
+      // Phase C: exclude soft-deleted investors from the dashboard summary
+      // (their historical rows remain queryable for audit, but they don't
+      // contribute to the consolidated portfolio view).
+      supabase.from('investors').select('id, project_id, name, share_percent, amount_invested').eq('is_deleted', false),
       supabase.from('investor_payments').select('investor_id, amount, payment_type, source_project_id, source_investor_id, destination_project_id, destination_investor_id, cash_adjustment_id'),
       supabase.from('profit_distributions').select('investor_id, amount'),
       supabase.from('project_expenses').select('project_id, amount'),

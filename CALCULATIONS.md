@@ -54,11 +54,21 @@ pool = 50,00,000 × 30 / 100 = 15,00,000
 Investor shares (and commitments) are slices of this pool, not the full
 property value.
 
-### 1.2 Auto-Scale Investor Commitments on Project Update
+### 1.2 Scaling Investor Commitments When the Project Pool Changes
 
-Database trigger `projects_scale_investor_commitments` fires when
-`p.total_value` or `p.our_stake_percent` changes. For every investor in that
-project:
+> **Master Audit 2.2 / Phase C update:** the database trigger
+> `projects_scale_investor_commitments` is **no longer active**. It used to
+> silently rescale every investor's `amount_invested` whenever
+> `total_value` or `our_stake_percent` changed — which could quietly flip
+> a fully-paid investor into the "Owes" state after a revaluation. The
+> trigger function is still defined for backwards compatibility but the
+> binding is dropped in `investtrack_full_setup.sql`.
+
+**Today, commitments are static unless explicitly rescaled.** The
+EditProjectSheet exposes a **"Scale investor commitments proportionally"**
+checkbox. When checked, the UI performs the same arithmetic the trigger
+used to do — in a single client-driven update — and the user is told
+exactly which investors moved:
 
 ```
 new_amount_invested = old_amount_invested × (new_pool / old_pool)
@@ -69,6 +79,11 @@ new_amount_invested = old_amount_invested × (new_pool / old_pool)
 - Each investor's commitment: 1,50,000 → 1,50,000 × 1.333 = **2,00,000**
 - Their `share_percent` (25%) is unchanged — the stake stays the same, the
   cash backing it grows.
+
+If the checkbox is left **unchecked**, the project's `total_value` /
+`our_stake_percent` are updated but the investors' commitments stay where
+they were. (Their `share_percent` is then out of sync with the new pool;
+the UI flags this on the Investors tab.)
 
 ---
 
@@ -762,20 +777,32 @@ internal extraction.
 
 ### 17.3 Loan Repayment That Exceeds Total Due
 
-The auto-settle check fires once `Σ lr.amount ≥ total_due`. Subsequent
-repayments aren't blocked (you could record an over-repayment by mistake);
-the system records them but the loan stays `is_settled = true` and
-`outstanding_balance` goes negative — a visible signal.
+The auto-settle check fires once `Σ lr.amount ≥ total_due`.
 
 **Phase B safeguards.** A DB-level `CHECK (amount > 0)` on `loan_repayments`
 blocks zero or negative repayment rows entirely. The Record Repayment sheet
-displays an inline amber warning when the entered amount exceeds outstanding:
+also displays an inline amber warning before submit when the entered amount
+exceeds outstanding.
 
-> ⚠ Repayment exceeds outstanding by ₹X. Loan will auto-settle but the
-> outstanding balance will go negative. Edit on the loan card if this was a typo.
+**Phase C hard block.** A BEFORE INSERT trigger
+`tr_block_over_repayment` on `loan_repayments` now aborts the insert
+when `Σ lr.amount + NEW.amount > total_due + 0.01`. The 1-paise
+tolerance is the round-trip rounding margin; anything larger is treated
+as user error.
 
-The warning is informational — sometimes you genuinely want to record a
-small overrun (rounding settlement). Not a hard block.
+```
+total_due = round(ca.amount × (1 + ca.interest_rate_percent / 100), 2)
+```
+
+The trigger raises:
+
+> Repayment of ₹X would exceed outstanding (total due ₹Y, already repaid
+> ₹Z, this would total ₹W). Edit the loan amount/interest first, or route
+> the overpayment elsewhere.
+
+Genuine settlement-rounding overpayments under 1 paise pass through; anything
+material must be reconciled by editing the loan principal/interest or by
+recording the overpayment as a separate ledger entry.
 
 ### 17.4 Profit Record Deleted
 
@@ -785,24 +812,54 @@ distributed cash for that profit, you'd need to manually record refunds.
 
 ### 17.5 Investor Deleted
 
-Cascades to their `investor_payments`, `profit_distributions`,
-`loan_contributions`, and `repayment_distributions`. Their share %
-disappears — other investors don't automatically pick up the slack (you'd
-need to re-balance manually).
+> **Master Audit Phase C — Item 4.** The FKs from `investor_payments`,
+> `loan_contributions`, and `profit_distributions` to `investors.id` are
+> now `ON DELETE RESTRICT`. A hard `DELETE` against an investor with any
+> ledger history will trip the FK and raise. The `deleteInvestor()` hook
+> catches PostgreSQL error `23503` and falls back to a **soft delete** —
+> setting `investors.is_deleted = true` — so the historical rows survive.
 
-### 17.6 Project Total Changed Mid-Cycle
+What the UI does:
 
-`projects_scale_investor_commitments` trigger scales `amount_invested`
-proportionally. Already-recorded payments, profits, and expenses keep their
-absolute amounts. So if a project's pool doubles, the commitment doubles,
-but the paid-so-far stays the same → outstanding effectively doubles.
+- Pickers (`useInvestors`, `useAllInvestors`, `useAllInvestorsSummary`)
+  filter out `is_deleted = true` rows so a soft-deleted investor can't be
+  selected for new payments / loans / moves.
+- Existing payments, profit distributions, loan contributions, and
+  repayment distributions remain intact and remain visible on the
+  per-investor ledger and audit trails.
+- The user is told via toast whether the delete went through as a hard
+  delete or as an archive (soft delete).
 
-### 17.7 Name Mismatch in Reallocation Match
+If you need to physically remove the row (e.g. a duplicate created in
+error with no real history), delete the dependent rows first via the
+Payments tab, then the hard delete will succeed.
 
-Both `process_loan_repayment` and `reallocate_investor_position` use
-`lower(regexp_replace(trim(name), '\s+', ' ', 'g'))` for matching.
-Two records with subtle spelling differences (e.g. NANNEBOINA vs NANNEBOYINA)
-will not match — fix via Edit on either investor's card.
+### 17.6 Name Mismatch in Reallocation Match
+
+> **Master Audit Phase C — Item 3.** The case-insensitive name fallback
+> has been **removed** from both `process_loan_repayment` and
+> `reallocate_investor_position`. Both RPCs now require an explicit
+> destination investor UUID (or, for project_adjustment repayments, a
+> JSON map keyed by contributor UUID).
+
+The UI builds the UUID map up front by joining `loan_contributions` /
+the source investor to the destination project's investors on a
+normalized name match (`lower(regexp_replace(trim(name), '\s+', ' ', 'g'))`).
+That match is identical to what the RPC used to do internally — but now
+the resolution is **visible**: if it fails, the user sees:
+
+> No investor named "X" on the destination project. Add them there first.
+
+…before the RPC is ever called. If the user bypasses the UI (direct RPC
+call from psql), the RPC itself raises:
+
+> Compliance Violation: p_dest_investor_id is required. Name-string
+> fallback has been removed.
+
+Subtle spelling differences (e.g. NANNEBOINA vs NANNEBOYINA) still need
+to be fixed on one of the investor cards before the operation will
+succeed — but the failure mode is now an explicit refusal rather than a
+silent skip or, worse, a wrong match.
 
 ---
 
