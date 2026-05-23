@@ -1,8 +1,15 @@
 # InvestTrack — Calculations Reference
 
 Every formula in the system, with definitions, worked examples, and edge cases.
-This is a companion to `DESIGN.md` — that document describes the architecture;
-this one gives you the math.
+This is a companion to [`DESIGN.md`](./DESIGN.md) — that document describes the
+architecture; this one gives you the math.
+
+**Reflects state as of the late-May-2026 Master Audit Phase B**:
+- Running Balance subtracts `loans_received_outstanding` (Section 9)
+- `process_loan_repayment` accepts a UUID destination map (Section 7.5)
+- Project-level Paid excludes refunds-with-destination (Section 5.1)
+- Project-level Owes derives from positive contributions only (Section 5.2)
+- Over-repayment is warned in UI + blocked at amount ≤ 0 by DB CHECK (Section 17.3)
 
 ---
 
@@ -359,6 +366,24 @@ distribution_to_c = R × (lc.amount / total_principal_contributions)
 
 The principal vs interest split is implicit — across the full life of the loan,
 each contributor receives `lc.amount × (1 + rate/100)` total.
+
+**Destination resolution for `project_adjustment` repayments** (Master Audit Phase B).
+When a repayment is routed into another project, each contributor's destination
+investor on that project must be identified. `process_loan_repayment` accepts an
+optional `p_dest_investor_map` JSON parameter:
+
+```json
+[
+  { "contributor_id": "<uuid-of-contributor>", "dest_investor_id": "<uuid-of-investor-on-dest-project>" },
+  ...
+]
+```
+
+When provided, the RPC uses the UUID directly. When omitted, falls back to
+`lower(regexp_replace(trim(name), '\s+', ' ', 'g'))` matching. The frontend
+pre-resolves the mapping by joining `loan_contributions` to the destination
+project's investors via case+whitespace-insensitive name match — so the
+fallback only fires for edge cases.
 
 **Example.** ₹1,00,000 loan at 10% (₹1,10,000 total due) funded by:
 - A: ₹60,000 (60%)
@@ -741,6 +766,16 @@ The auto-settle check fires once `Σ lr.amount ≥ total_due`. Subsequent
 repayments aren't blocked (you could record an over-repayment by mistake);
 the system records them but the loan stays `is_settled = true` and
 `outstanding_balance` goes negative — a visible signal.
+
+**Phase B safeguards.** A DB-level `CHECK (amount > 0)` on `loan_repayments`
+blocks zero or negative repayment rows entirely. The Record Repayment sheet
+displays an inline amber warning when the entered amount exceeds outstanding:
+
+> ⚠ Repayment exceeds outstanding by ₹X. Loan will auto-settle but the
+> outstanding balance will go negative. Edit on the loan card if this was a typo.
+
+The warning is informational — sometimes you genuinely want to record a
+small overrun (rounding settlement). Not a hard block.
 
 ### 17.4 Profit Record Deleted
 
