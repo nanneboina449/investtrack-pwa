@@ -2,10 +2,11 @@
 import { NavLink } from 'react-router-dom'
 
 const NAV = [
-  { to: '/',         label: 'Portfolio', icon: '◈' },
-  { to: '/projects', label: 'Projects',  icon: '⬡' },
-  { to: '/cashflow', label: 'Cash Flow', icon: '⇄' },
-  { to: '/settings', label: 'Settings',  icon: '⚙' },
+  { to: '/',          label: 'Portfolio', icon: '◈' },
+  { to: '/projects',  label: 'Projects',  icon: '⬡' },
+  { to: '/investors', label: 'Investors', icon: '👥' },
+  { to: '/cashflow',  label: 'Cash Flow', icon: '⇄' },
+  { to: '/settings',  label: 'Settings',  icon: '⚙' },
 ]
 
 export default function Layout({ children }) {

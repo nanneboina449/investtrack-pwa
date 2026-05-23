@@ -10,6 +10,7 @@ import Auth          from './pages/Auth'
 import MyPortfolio   from './pages/MyPortfolio'
 import Projects      from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
+import Investors     from './pages/Investors'
 import CashFlow      from './pages/CashFlow'
 import Settings      from './pages/Settings'
 import { Spinner }   from './components/ui'
@@ -86,6 +87,7 @@ function MainApp() {
               <Route path="/"             element={<MyPortfolio />} />
               <Route path="/projects"     element={<Projects />} />
               <Route path="/projects/:id" element={<ProjectDetail />} />
+              <Route path="/investors"    element={<Investors />} />
               <Route path="/cashflow"     element={<CashFlow />} />
               <Route path="/settings"     element={<Settings />} />
               <Route path="*"             element={<Navigate to="/" replace />} />

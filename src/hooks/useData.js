@@ -722,6 +722,35 @@ export function useAllInvestors() {
   })
 }
 
+// Manage Investors page hook — fetches every investor record (including
+// email, soft-delete status) and joins the project name client-side so
+// the UI can group by project. Includes soft-deleted rows when
+// includeDeleted=true (the Investors page has a toggle for that).
+export function useAllInvestorsAdmin(includeDeleted = false) {
+  return useFetch(async () => {
+    const [invsRes, projsRes] = await Promise.all([
+      supabase.from('investors')
+        .select('id, project_id, name, email, share_percent, amount_invested, is_deleted, created_at')
+        .order('name'),
+      supabase.from('my_projects').select('id, name, status'),
+    ])
+    if (invsRes.error) throw invsRes.error
+    const projById = {}
+    for (const p of (projsRes.data ?? [])) projById[p.id] = p
+
+    return (invsRes.data ?? [])
+      .filter(i => includeDeleted ? true : !i.is_deleted)
+      .map(i => ({
+        ...i,
+        project_name:   projById[i.project_id]?.name   ?? '(no access)',
+        project_status: projById[i.project_id]?.status ?? null,
+      }))
+      // Drop rows for projects RLS hid from us — those won't appear in
+      // my_projects so project_name comes back '(no access)'.
+      .filter(i => i.project_name !== '(no access)')
+  }, [includeDeleted])
+}
+
 // ── Cross-project investor summary (for the owner's dashboard) ──
 // Aggregates every investor record visible to the user, groups by name,
 // and computes their consolidated position across all projects.
