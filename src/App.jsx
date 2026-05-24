@@ -7,12 +7,13 @@ import Auth          from './pages/Auth'
 // MyPortfolio replaces the legacy org-wide Dashboard at /. The
 // Dashboard.jsx file is retained in src/pages but no longer routed —
 // see investtrack_portfolio_ui_spec.pdf for the personal-only view rationale.
-import MyPortfolio   from './pages/MyPortfolio'
-import Projects      from './pages/Projects'
-import ProjectDetail from './pages/ProjectDetail'
-import Investors     from './pages/Investors'
-import CashFlow      from './pages/CashFlow'
-import Settings      from './pages/Settings'
+import MyPortfolio       from './pages/MyPortfolio'
+import PortfolioExplain  from './pages/PortfolioExplain'
+import Projects          from './pages/Projects'
+import ProjectDetail     from './pages/ProjectDetail'
+import Investors         from './pages/Investors'
+import CashFlow          from './pages/CashFlow'
+import Settings          from './pages/Settings'
 import { Spinner }   from './components/ui'
 
 // ── Setup screen (shown when env vars missing) ────────────────
@@ -84,8 +85,9 @@ function MainApp() {
         <ProtectedRoute>
           <Layout>
             <Routes>
-              <Route path="/"             element={<MyPortfolio />} />
-              <Route path="/projects"     element={<Projects />} />
+              <Route path="/"                  element={<MyPortfolio />} />
+              <Route path="/portfolio/explain" element={<PortfolioExplain />} />
+              <Route path="/projects"          element={<Projects />} />
               <Route path="/projects/:id" element={<ProjectDetail />} />
               <Route path="/investors"    element={<Investors />} />
               <Route path="/cashflow"     element={<CashFlow />} />

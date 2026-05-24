@@ -1031,7 +1031,13 @@ export function useMyInvestments() {
 // auth.email() AND the row's name matches user_metadata.full_name. If
 // the user's name metadata isn't set, falls back to email-only so the
 // screen still works (with a debug warning).
-export function useMyPortfolio() {
+//
+// Options:
+//   allowNameFallback (default false) — adds a tier-3 fallback that
+//     matches by name alone when no records have the user's email yet.
+//     Used by /portfolio/explain so the breakdown is visible even
+//     before the user runs the RLS fix and links their email.
+export function useMyPortfolio({ allowNameFallback = false } = {}) {
   return useFetch(async () => {
     // 1. Identify the logged-in user
     const { data: { user } } = await supabase.auth.getUser()
@@ -1075,6 +1081,9 @@ export function useMyPortfolio() {
     const candidatesByEmail = allInvs.filter(i =>
       !i.is_deleted && norm(i.email) === myEmail
     )
+    const candidatesByName = myName
+      ? allInvs.filter(i => !i.is_deleted && norm(i.name) === myName)
+      : []
     const strictMatches = candidatesByEmail.filter(i =>
       !myName || norm(i.name) === myName
     )
@@ -1087,6 +1096,11 @@ export function useMyPortfolio() {
     } else if (candidatesByEmail.length > 0) {
       myRecords = candidatesByEmail
       matchMode = 'loose-email-only'
+    } else if (allowNameFallback && candidatesByName.length > 0) {
+      // Opt-in: used by /portfolio/explain so the breakdown is
+      // visible before the user links their email in /investors.
+      myRecords = candidatesByName
+      matchMode = 'loose-name-only'
     }
 
     if (myRecords.length === 0) {
@@ -1347,5 +1361,5 @@ export function useMyPortfolio() {
       loansReceived,
       timeline: rows,
     }
-  })
+  }, [allowNameFallback])
 }
