@@ -161,6 +161,12 @@ function Hero({ runningBalance, netReturn }) {
       <p className={`mt-3 text-sm font-semibold ${moneyClass(netReturn)}`}>
         {returnSign} {inr(Math.abs(Math.round(netReturn)))} (All-Time Return)
       </p>
+      <Link
+        to="/portfolio/explain"
+        className="inline-block mt-3 text-[11px] font-semibold text-brand-700 underline decoration-dotted underline-offset-2"
+      >
+        How is this calculated? →
+      </Link>
     </div>
   )
 }
