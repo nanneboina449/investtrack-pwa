@@ -1053,7 +1053,7 @@ export function useMyPortfolio({ allowNameFallback = false } = {}) {
     const [allInvestorsRes, projectsRes, ownedProjectsRes] = await Promise.all([
       supabase.from('investors')
         .select('id, project_id, name, email, share_percent, amount_invested, is_deleted'),
-      supabase.from('my_projects').select('id, name, status, total_value, our_stake_percent, user_id'),
+      supabase.from('my_projects').select('id, name, status, total_value, our_stake_percent, user_id, name, status'),
       // Projects this user owns (auth.uid matches projects.user_id). Used as
       // a fallback display when they own projects but haven't added themselves
       // as an investor — the empty state surfaces "Projects you own" with a
@@ -1305,16 +1305,37 @@ export function useMyPortfolio({ allowNameFallback = false } = {}) {
       // balance (the math already nets it out via paid_net vs expense_share).
       const othersShareOfMyExpenses = expensePaidByMe * (1 - share)
 
+      // User's mental model: expenses inflate the project's required pool.
+      // Each investor's scaled commitment = share% × (pool + expenses).
+      // If they paid more than that, they get a refund; if less, they owe.
+      const propertyValue   = Number(proj.total_value ?? 0)
+      const ourStakePct     = Number(proj.our_stake_percent ?? 100)
+      const ourPool         = propertyValue * ourStakePct / 100
+      const projectExpenses = expenseByProject[rec.project_id] ?? 0
+      const projectTotal    = ourPool + projectExpenses
+      const scaledCommitment = projectTotal * share
+      const refundDue = Math.max(0, myPaidNet - scaledCommitment)
+      const owes      = Math.max(0, scaledCommitment - myPaidNet)
+
       if (!projectsRollup[rec.project_id]) {
         projectsRollup[rec.project_id] = {
           project_id: rec.project_id,
           name: proj.name,
           status: proj.status,
           share_percent: Number(rec.share_percent || 0),
+          // Legacy fields kept for backwards compatibility with MyPortfolio cards
           invested: 0, profit: 0, expense: 0, currentValue: 0,
+          // Per-payment-type breakdown (used by PortfolioExplain)
           contribIn: 0, topUpExternal: 0, expensePaidByMe: 0,
           moveIn: 0, moveOut: 0, refundExternal: 0,
           othersShareOfMyExpenses: 0,
+          // User's mental model — expenses-included pool & settlement
+          ourPool: 0,
+          projectExpenses: 0,
+          projectTotal: 0,
+          scaledCommitment: 0,
+          refundDue: 0,
+          owes: 0,
         }
       }
       const r = projectsRollup[rec.project_id]
@@ -1329,13 +1350,40 @@ export function useMyPortfolio({ allowNameFallback = false } = {}) {
       r.moveOut                 += moveOut
       r.refundExternal          += refundExternal
       r.othersShareOfMyExpenses += othersShareOfMyExpenses
+      // The pool / project total / scaled commitment fields are project-
+      // level (not per-record), so we ASSIGN rather than accumulate. If
+      // the user has multiple investor records on the same project, the
+      // last write wins — but they'd be identical values anyway.
+      r.ourPool          = ourPool
+      r.projectExpenses  = projectExpenses
+      r.projectTotal     = projectTotal
+      r.scaledCommitment = (r.scaledCommitment ?? 0) + scaledCommitment
+      r.refundDue        = (r.refundDue ?? 0) + refundDue
+      r.owes             = (r.owes ?? 0) + owes
     }
     const projects = Object.values(projectsRollup)
       .sort((a, b) => b.currentValue - a.currentValue)
 
-    // Hero running balance — same formula as the project-owner Dashboard,
-    // restricted to this person's records.
-    const runningBalance = profitTotal - expenseTotal + paidNet
+    // Hero running balance — switched to the user's mental model in
+    // 2026-05-25:
+    //
+    //   Running Balance = paid_in (net of refunds)
+    //                   + profits credited
+    //                   + loans given (outstanding)
+    //                   − loans received (outstanding)
+    //
+    // The previous formula subtracted expense_share as a "cost absorbed"
+    // term, double-counting the burden because expenses already inflate
+    // the project pool (and therefore the scaled commitment, which is
+    // implicit in paid_in vs refund_due/owes).
+    //
+    // If you paid your fair share of expenses, paid_in == scaled_commitment
+    //   → running = scaled_commitment + profit
+    // If you paid more (e.g. fronted an expense), paid_in > scaled_commitment
+    //   → running = scaled_commitment + profit + refund_due (others' share)
+    // If you paid less, paid_in < scaled_commitment
+    //   → running = paid_so_far + profit (your future owes is a separate liability)
+    const runningBalance = profitTotal + paidNet
       + loansGivenOutstanding - loansReceivedOutstanding
 
     // 5. Timeline for the AreaChart and ledger view
