@@ -44,16 +44,30 @@ export default function PortfolioExplain() {
   }
 
   // ── Aggregate per-project line items ───────────────────────
-  // useMyPortfolio already gives us per-project {invested, profit, expense, currentValue}
-  // — we just re-format here with labels for the breakdown table.
+  // useMyPortfolio already gives us per-project {invested, profit, expense,
+  // currentValue} AND a per-payment-type breakdown
+  // (contribIn / topUpExternal / expensePaidByMe / moveIn/moveOut /
+  // refundExternal / othersShareOfMyExpenses).
 
-  const cashByProject = data.projects.map(p => ({
-    project_id: p.project_id,
-    name: p.name,
-    share_percent: p.share_percent,
-    amount: p.invested,
-  }))
+  const cashByProject = data.projects
+    .map(p => ({
+      project_id: p.project_id,
+      name: p.name,
+      share_percent: p.share_percent,
+      // Net cash you put in for this project, broken out by type
+      contribIn:               p.contribIn               ?? 0,
+      topUpExternal:           p.topUpExternal           ?? 0,
+      expensePaidByMe:         p.expensePaidByMe         ?? 0,
+      moveIn:                  p.moveIn                  ?? 0,
+      moveOut:                 p.moveOut                 ?? 0,
+      refundExternal:          p.refundExternal          ?? 0,
+      othersShareOfMyExpenses: p.othersShareOfMyExpenses ?? 0,
+      amount: p.invested,
+    }))
+    .filter(p => p.amount !== 0 || p.expensePaidByMe > 0)
   const totalPaid = cashByProject.reduce((s, p) => s + p.amount, 0)
+  const totalExpensesPaidByMe = cashByProject.reduce((s, p) => s + p.expensePaidByMe, 0)
+  const totalOthersShareReceivable = cashByProject.reduce((s, p) => s + p.othersShareOfMyExpenses, 0)
 
   const profitByProject = data.projects.map(p => ({
     project_id: p.project_id,
@@ -111,18 +125,40 @@ export default function PortfolioExplain() {
           </pre>
         </div>
 
-        {/* Section: Cash Paid In */}
+        {/* Section: Cash Paid In — broken down by payment type per project */}
         <Section
-          title="1. Cash you paid in (per project)"
+          title="1. Cash you paid in (per project, by type)"
           subtotal={totalPaid}
           op="+"
-          help="Money out of your wallet into each project: share contributions, top-ups, and any project expenses you paid personally. Refunds you received back (without re-deployment) subtract here."
+          help="Every payment out of your wallet, separated by type so you can see exactly what each contribution was. Expenses you paid personally show in full here — your share of those is then subtracted in section 3, leaving the other investors' share as an implicit receivable."
         >
           {cashByProject.length === 0 && <RowEmpty text="No payments recorded." />}
           {cashByProject.map(p => (
-            <Row key={p.project_id} primary={p.name} sub={`${p.share_percent}% share`} amount={p.amount} link={`/projects/${p.project_id}`} />
+            <ProjectCashCard key={p.project_id} p={p} />
           ))}
         </Section>
+
+        {/* Callout: explain expense-paid → expense-share relationship */}
+        {totalExpensesPaidByMe > 0 && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-[12px] text-emerald-900">
+            <p className="font-semibold mb-2">💡 You paid project expenses out of your pocket</p>
+            <p className="leading-relaxed">
+              You paid <strong className="font-mono">{fmt(totalExpensesPaidByMe)}</strong> of project
+              expenses personally. The full amount is counted in section 1 above (cash that left
+              your wallet). Section 3 below subtracts only <strong>your share</strong> of those
+              expenses — the rest (
+              <strong className="font-mono text-fintech-green">{fmt(totalOthersShareReceivable)}</strong>
+              ) is effectively owed back to you by the other investors via the project's books.
+              Your Running Balance already credits you for it because:
+            </p>
+            <pre className="mt-2 font-mono text-[11px] bg-white/70 rounded-lg p-2 leading-snug whitespace-pre-wrap">
+{`  Full expense you paid:                + ${fmt(totalExpensesPaidByMe)}  (in section 1)
+  Less: your share of project expense:  − ${fmt(totalExpensesPaidByMe - totalOthersShareReceivable)}  (in section 3)
+  ────────────────────────────────────────
+  Net credit to your portfolio:         + ${fmt(totalOthersShareReceivable)}  (others' share, receivable)`}
+            </pre>
+          </div>
+        )}
 
         {/* Section: Profits */}
         <Section
@@ -231,6 +267,56 @@ function Section({ title, subtotal, op, help, children }) {
         {children}
       </div>
     </section>
+  )
+}
+
+// ── Project cash breakdown card (used in section 1) ──────
+// Renders each project's payments grouped by type so the user can see
+// "this came from a share contribution, this from paying an expense,
+// this from a reallocation, etc." Header shows the project + net total;
+// inner rows show only the non-zero buckets.
+function ProjectCashCard({ p }) {
+  const items = [
+    { key: 'contrib',  label: 'Share contributions',           amount:  p.contribIn,        note: null },
+    { key: 'topup',    label: 'Top-ups (external)',            amount:  p.topUpExternal,    note: null },
+    { key: 'expense',  label: 'Expenses you paid personally',  amount:  p.expensePaidByMe,
+      note: p.expensePaidByMe > 0
+        ? `Of which ${fmt(p.expensePaidByMe * p.share_percent / 100)} is your fair share; ${fmt(p.othersShareOfMyExpenses)} is the others' share (a receivable).`
+        : null },
+    { key: 'movein',   label: 'Reallocations in (from another project)', amount:  p.moveIn,  note: null },
+    { key: 'moveout',  label: 'Reallocations out (to another project)',  amount: -p.moveOut, note: null },
+    { key: 'refund',   label: 'External refunds received',     amount: -p.refundExternal,   note: null },
+  ].filter(it => Math.abs(it.amount) > 0.5)
+
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-center justify-between mb-2">
+        <Link to={`/projects/${p.project_id}`} className="font-semibold text-gray-900 text-sm hover:text-brand-700">
+          {p.name}
+          <span className="ml-2 text-[10px] font-medium text-gray-500">({p.share_percent}% share)</span>
+        </Link>
+        <span className={`font-mono font-bold text-sm ${p.amount >= 0 ? 'text-fintech-green' : 'text-fintech-red'}`}>
+          {p.amount < 0 ? '− ' : '+ '}{fmt(Math.abs(p.amount))}
+        </span>
+      </div>
+      <div className="space-y-1 pl-2 border-l-2 border-gray-100">
+        {items.map(it => (
+          <div key={it.key}>
+            <div className="flex items-center justify-between text-[12px]">
+              <span className="text-gray-600">{it.label}</span>
+              <span className={`font-mono ${it.amount >= 0 ? 'text-gray-700' : 'text-fintech-red'}`}>
+                {it.amount < 0 ? '− ' : '+ '}{fmt(Math.abs(it.amount))}
+              </span>
+            </div>
+            {it.note && (
+              <p className="text-[10px] text-emerald-700 bg-emerald-50/60 rounded px-2 py-1 mt-1 leading-snug">
+                {it.note}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 

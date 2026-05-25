@@ -1254,7 +1254,15 @@ export function useMyPortfolio({ allowNameFallback = false } = {}) {
       })
     }
 
-    // Per-project breakdown (asset cards)
+    // Per-project breakdown (asset cards + explain page).
+    //
+    // Each project tracks BOTH the lumped `invested` (net paid_net for the
+    // hero card view) AND a per-payment-type breakdown for the breakdown
+    // page. The breakdown is important because when an investor pays a
+    // project expense in full, section 1 of the explain page should show
+    // the FULL amount as cash they paid out, and section 3 should subtract
+    // only their share of the expense — leaving the difference (the other
+    // investors' share) as an implicit receivable visible in the math.
     const projectsRollup = {}
     for (const rec of myRecords) {
       const proj = projectMap[rec.project_id]
@@ -1264,10 +1272,39 @@ export function useMyPortfolio({ allowNameFallback = false } = {}) {
         .filter(d => d.investor_id === rec.id)
         .reduce((s, d) => s + Number(d.amount || 0), 0)
       const myExpense = (expenseByProject[rec.project_id] ?? 0) * share
-      const myPaidNet = (paymentsRes.data ?? [])
-        .filter(p => p.investor_id === rec.id)
-        .reduce((s, p) => s + (p.payment_type === 'refund' ? -1 : 1) * Number(p.amount || 0), 0)
+
+      // Per-type bucketing for this investor's payments on this project.
+      // - share_contribution / top_up_external / expense_paid: cash out → positive paid_net
+      // - top_up with source_project_id: internal reallocation IN (still positive in net cash terms)
+      // - refund with destination_project_id: internal reallocation OUT (negative)
+      // - refund without destination: external cash back (negative)
+      let contribIn = 0, topUpExternal = 0, expensePaidByMe = 0
+      let moveIn = 0, moveOut = 0, refundExternal = 0
+      for (const p of (paymentsRes.data ?? [])) {
+        if (p.investor_id !== rec.id) continue
+        const amt = Number(p.amount || 0)
+        if (p.payment_type === 'share_contribution') contribIn += amt
+        else if (p.payment_type === 'top_up') {
+          if (p.source_project_id) moveIn += amt
+          else                     topUpExternal += amt
+        }
+        else if (p.payment_type === 'expense_paid') expensePaidByMe += amt
+        else if (p.payment_type === 'refund') {
+          if (p.destination_project_id) moveOut += amt
+          else                          refundExternal += amt
+        }
+      }
+      const myPaidNet = contribIn + topUpExternal + expensePaidByMe + moveIn
+                      - refundExternal - moveOut
       const currentValue = myPaidNet + myProfit - myExpense
+
+      // Others' share of expenses YOU paid — i.e. how much of the
+      // expensePaidByMe is effectively a receivable from the rest of
+      // the cap table. Computed as expensePaidByMe × (1 − share). This
+      // is informational only; it's NOT added separately to the running
+      // balance (the math already nets it out via paid_net vs expense_share).
+      const othersShareOfMyExpenses = expensePaidByMe * (1 - share)
+
       if (!projectsRollup[rec.project_id]) {
         projectsRollup[rec.project_id] = {
           project_id: rec.project_id,
@@ -1275,13 +1312,23 @@ export function useMyPortfolio({ allowNameFallback = false } = {}) {
           status: proj.status,
           share_percent: Number(rec.share_percent || 0),
           invested: 0, profit: 0, expense: 0, currentValue: 0,
+          contribIn: 0, topUpExternal: 0, expensePaidByMe: 0,
+          moveIn: 0, moveOut: 0, refundExternal: 0,
+          othersShareOfMyExpenses: 0,
         }
       }
       const r = projectsRollup[rec.project_id]
-      r.invested     += myPaidNet
-      r.profit       += myProfit
-      r.expense      += myExpense
-      r.currentValue += currentValue
+      r.invested                += myPaidNet
+      r.profit                  += myProfit
+      r.expense                 += myExpense
+      r.currentValue            += currentValue
+      r.contribIn               += contribIn
+      r.topUpExternal           += topUpExternal
+      r.expensePaidByMe         += expensePaidByMe
+      r.moveIn                  += moveIn
+      r.moveOut                 += moveOut
+      r.refundExternal          += refundExternal
+      r.othersShareOfMyExpenses += othersShareOfMyExpenses
     }
     const projects = Object.values(projectsRollup)
       .sort((a, b) => b.currentValue - a.currentValue)
