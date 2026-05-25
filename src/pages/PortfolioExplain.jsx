@@ -1,26 +1,34 @@
 // src/pages/PortfolioExplain.jsx
 //
-// "Running Balance Explained" — a transparent, line-by-line breakdown
-// of how the Portfolio's Running Balance hero number is computed.
-// Pulls every contributing transaction from the DB and shows the math
-// step by step so the user can cross-check against what they remember
-// paying / earning / owing.
+// "Running Balance Explained" — uses the user's mental model:
 //
-// Visible to whoever is logged in; shows only their own data (same
-// matching rules as MyPortfolio, plus a name-only fallback so the page
-// works even before the user links their email in /investors).
+//   For each project:
+//     project_total = property_value × our_stake% + total_expenses_to_date
+//     scaled_commitment = your_share% × project_total
+//     paid_in = your share contributions + top-ups + expenses you paid − refunds
+//     refund_due = max(0, paid_in − scaled_commitment)   (cash owed back to you)
+//     owes       = max(0, scaled_commitment − paid_in)   (cash you still owe)
+//     profit_credited = your profit distributions on this project
+//
+//     net_from_project = paid_in + profit_credited
+//                       (already includes the over-paid amount as a refund)
+//
+//   Running Balance
+//     = sum across projects of (paid_in + profit_credited)
+//       + loans you gave (outstanding)
+//       − loans you received (outstanding)
+//
+// This matches the cleaner accounting: expenses inflate the pool, the
+// scaled commitment rises proportionally, and any overpayment is
+// automatically refund-due (no separate "expense share absorbed" cost).
 import { Link } from 'react-router-dom'
 import { useMyPortfolio } from '../hooks/useData'
 import { inr } from '../lib/supabase'
 import { Spinner, Empty } from '../components/ui'
 
 const fmt = (n) => inr(Math.round(Number(n || 0)))
-const sign = (n) => n >= 0 ? '+' : '−'
 
 export default function PortfolioExplain() {
-  // allowNameFallback: this page works for project owners who haven't
-  // run the RLS-update SQL yet and therefore can't link their email
-  // via /investors. Matches by metadata.full_name only as a last resort.
   const { data, loading, error } = useMyPortfolio({ allowNameFallback: true })
 
   if (loading) {
@@ -43,39 +51,22 @@ export default function PortfolioExplain() {
     )
   }
 
-  // ── Aggregate per-project line items ───────────────────────
-  // useMyPortfolio already gives us per-project {invested, profit, expense, currentValue}
-  // — we just re-format here with labels for the breakdown table.
+  // ── Per-project totals
+  const projects = data.projects.filter(p =>
+    (p.invested ?? 0) !== 0 || (p.profit ?? 0) !== 0 || (p.scaledCommitment ?? 0) > 0
+  )
 
-  const cashByProject = data.projects.map(p => ({
-    project_id: p.project_id,
-    name: p.name,
-    share_percent: p.share_percent,
-    amount: p.invested,
-  }))
-  const totalPaid = cashByProject.reduce((s, p) => s + p.amount, 0)
+  const totalPaid              = projects.reduce((s, p) => s + (p.invested ?? 0), 0)
+  const totalProfit            = projects.reduce((s, p) => s + (p.profit ?? 0), 0)
+  const totalScaledCommitment  = projects.reduce((s, p) => s + (p.scaledCommitment ?? 0), 0)
+  const totalRefundDue         = projects.reduce((s, p) => s + (p.refundDue ?? 0), 0)
+  const totalOwes              = projects.reduce((s, p) => s + (p.owes ?? 0), 0)
 
-  const profitByProject = data.projects.map(p => ({
-    project_id: p.project_id,
-    name: p.name,
-    share_percent: p.share_percent,
-    amount: p.profit,
-  })).filter(p => p.amount !== 0)
-  const totalProfit = profitByProject.reduce((s, p) => s + p.amount, 0)
+  const totalLoansGiven        = data.loansGiven.reduce((s, l) => s + l.outstanding, 0)
+  const totalLoansReceived     = data.loansReceived.reduce((s, l) => s + l.outstanding, 0)
 
-  const expenseByProject = data.projects.map(p => ({
-    project_id: p.project_id,
-    name: p.name,
-    share_percent: p.share_percent,
-    amount: p.expense,
-  })).filter(p => p.amount > 0)
-  const totalExpense = expenseByProject.reduce((s, p) => s + p.amount, 0)
-
-  const totalLoansGiven    = data.loansGiven.reduce((s, l) => s + l.outstanding, 0)
-  const totalLoansReceived = data.loansReceived.reduce((s, l) => s + l.outstanding, 0)
-
-  // Running balance — recomputed here so the page is self-contained
-  const running = totalProfit - totalExpense + totalPaid + totalLoansGiven - totalLoansReceived
+  // User's-model running balance — paid + profit, with loans on top
+  const running = totalPaid + totalProfit + totalLoansGiven - totalLoansReceived
 
   return (
     <div className="page-enter">
@@ -99,97 +90,88 @@ export default function PortfolioExplain() {
 
       <div className="px-5 py-5 space-y-5 max-w-3xl mx-auto">
 
-        {/* The Formula */}
+        {/* The Formula in user's mental model */}
         <div className="bg-brand-50 border border-brand-100 rounded-2xl p-4">
-          <p className="text-[11px] font-semibold text-brand-900 uppercase tracking-wider mb-2">Formula</p>
+          <p className="text-[11px] font-semibold text-brand-900 uppercase tracking-wider mb-2">How this works</p>
           <pre className="text-[12px] text-brand-900 font-mono leading-relaxed whitespace-pre-wrap">
-{`Running Balance = Cash you paid in
-                + Profits credited to you
-                − Your share of project expenses
-                + Loans you GAVE (still owed back to you)
-                − Loans you RECEIVED (still owed by you)`}
+{`For each project:
+  project_total      = property value + total expenses
+  your commitment    = your share% × project_total
+  you paid           = share contributions + top-ups + expenses you paid
+                       − refunds received
+  refund due / owes  = you_paid − your_commitment
+                       (positive = refund coming, negative = still to pay)
+
+Running Balance
+  = sum across projects of (you_paid + your_profit_credited)
+  + outstanding loans you GAVE (receivables)
+  − outstanding loans you RECEIVED (payables)`}
           </pre>
         </div>
 
-        {/* Section: Cash Paid In */}
-        <Section
-          title="1. Cash you paid in (per project)"
-          subtotal={totalPaid}
-          op="+"
-          help="Money out of your wallet into each project: share contributions, top-ups, and any project expenses you paid personally. Refunds you received back (without re-deployment) subtract here."
-        >
-          {cashByProject.length === 0 && <RowEmpty text="No payments recorded." />}
-          {cashByProject.map(p => (
-            <Row key={p.project_id} primary={p.name} sub={`${p.share_percent}% share`} amount={p.amount} link={`/projects/${p.project_id}`} />
-          ))}
-        </Section>
+        {/* Section 1: Per-project breakdown */}
+        <section>
+          <div className="flex items-baseline justify-between mb-2 px-1">
+            <h2 className="text-sm font-bold text-gray-900">1. Project-by-project breakdown</h2>
+            <p className="text-[11px] text-gray-500">
+              {projects.length} project{projects.length === 1 ? '' : 's'}
+            </p>
+          </div>
+          <div className="space-y-3">
+            {projects.length === 0 && (
+              <div className="bg-white rounded-2xl border border-gray-100 p-4 text-[12px] text-gray-400 italic">
+                No project positions found.
+              </div>
+            )}
+            {projects.map(p => <ProjectBreakdown key={p.project_id} p={p} />)}
+          </div>
+        </section>
 
-        {/* Section: Profits */}
+        {/* Section 2: Loans given */}
         <Section
-          title="2. Profits credited to you"
-          subtotal={totalProfit}
-          op="+"
-          help="Your slice of every profit record on each project. Default split uses your share %; custom splits use the explicit per-investor amounts."
-        >
-          {profitByProject.length === 0 && <RowEmpty text="No profits credited yet." />}
-          {profitByProject.map(p => (
-            <Row key={p.project_id} primary={p.name} sub={`${p.share_percent}% share`} amount={p.amount} link={`/projects/${p.project_id}`} />
-          ))}
-        </Section>
-
-        {/* Section: Expense Share */}
-        <Section
-          title="3. Your share of project expenses"
-          subtotal={totalExpense}
-          op="−"
-          help="For each project expense, your absorbed share = expense × your share %. Whoever paid the expense from their pocket has it counted in section 1 already — this section subtracts what's truly your cost burden."
-        >
-          {expenseByProject.length === 0 && <RowEmpty text="No expenses to absorb." />}
-          {expenseByProject.map(p => (
-            <Row key={p.project_id} primary={p.name} sub={`${p.share_percent}% of project expenses`} amount={-p.amount} link={`/projects/${p.project_id}`} />
-          ))}
-        </Section>
-
-        {/* Section: Loans Given (assets) */}
-        <Section
-          title="4. Loans you gave (receivables — assets)"
+          title="2. Loans you gave (receivables — assets)"
           subtotal={totalLoansGiven}
           op="+"
-          help="Outstanding loans where you contributed money. The remaining balance = principal × (1 + interest %/100) minus what's already been repaid to you."
+          help="Outstanding loans where you contributed money. Remaining balance = principal × (1 + interest %/100) − repaid so far."
         >
           {data.loansGiven.length === 0 && <RowEmpty text="No outstanding loans given." />}
           {data.loansGiven.map(l => (
-            <Row key={l.id} primary={`Loan to ${l.counterparty}`}
-              sub={l.interest_pct > 0 ? `principal ${fmt(l.principal)} · ${l.interest_pct}% interest` : `principal ${fmt(l.principal)}`}
+            <Row key={l.id}
+              primary={`Loan to ${l.counterparty}`}
+              sub={l.interest_pct > 0
+                ? `principal ${fmt(l.principal)} · ${l.interest_pct}% interest`
+                : `principal ${fmt(l.principal)}`}
               amount={l.outstanding} />
           ))}
         </Section>
 
-        {/* Section: Loans Received (liabilities) */}
+        {/* Section 3: Loans received */}
         <Section
-          title="5. Loans you received (payables — liabilities)"
+          title="3. Loans you received (payables — liabilities)"
           subtotal={totalLoansReceived}
           op="−"
-          help="Outstanding loans where you borrowed money. Same formula as section 4 but works against you — money you still owe back."
+          help="Outstanding loans where you borrowed money. Same formula but works against you."
         >
           {data.loansReceived.length === 0 && <RowEmpty text="No outstanding loans received." />}
           {data.loansReceived.map(l => (
-            <Row key={l.id} primary={`Loan from ${l.counterparty}`}
-              sub={l.interest_pct > 0 ? `principal ${fmt(l.principal)} · ${l.interest_pct}% interest` : `principal ${fmt(l.principal)}`}
+            <Row key={l.id}
+              primary={`Loan from ${l.counterparty}`}
+              sub={l.interest_pct > 0
+                ? `principal ${fmt(l.principal)} · ${l.interest_pct}% interest`
+                : `principal ${fmt(l.principal)}`}
               amount={-l.outstanding} />
           ))}
         </Section>
 
-        {/* Final Running Balance */}
+        {/* Final Calculation */}
         <div className="bg-gray-900 text-white rounded-2xl p-5">
           <p className="text-xs uppercase tracking-wider text-gray-400 mb-2">Final Calculation</p>
           <table className="w-full text-sm">
             <tbody>
-              <CalcRow label="Cash paid in"            value={totalPaid}              op="+" />
-              <CalcRow label="Profits credited"        value={totalProfit}            op="+" />
-              <CalcRow label="Your expense share"      value={totalExpense}           op="−" />
-              <CalcRow label="Loans given outstanding" value={totalLoansGiven}        op="+" />
-              <CalcRow label="Loans received outstanding" value={totalLoansReceived}  op="−" />
+              <CalcRow label="Total cash you paid in (across all projects)" value={totalPaid}          op="+" />
+              <CalcRow label="Total profits credited"                       value={totalProfit}        op="+" />
+              <CalcRow label="Loans you gave (outstanding)"                 value={totalLoansGiven}    op="+" />
+              <CalcRow label="Loans you received (outstanding)"             value={totalLoansReceived} op="−" />
               <tr className="border-t border-gray-700">
                 <td className="pt-3 font-bold">Running Balance</td>
                 <td className="pt-3 text-right font-mono font-bold text-2xl text-fintech-green">
@@ -198,15 +180,32 @@ export default function PortfolioExplain() {
               </tr>
             </tbody>
           </table>
+
+          {(totalRefundDue > 0 || totalOwes > 0) && (
+            <div className="mt-4 pt-4 border-t border-gray-700 text-[12px]">
+              <p className="text-gray-400 mb-2">Settlement position across projects:</p>
+              {totalRefundDue > 0 && (
+                <p>
+                  <span className="text-fintech-green font-mono font-semibold">+ {fmt(totalRefundDue)}</span>
+                  <span className="text-gray-300 ml-2">refund due to you (you overpaid — already counted in "cash paid in" above; will come back as cash)</span>
+                </p>
+              )}
+              {totalOwes > 0 && (
+                <p className="mt-1">
+                  <span className="text-fintech-red font-mono font-semibold">− {fmt(totalOwes)}</span>
+                  <span className="text-gray-300 ml-2">you still owe to projects (future obligation — not yet subtracted from running balance)</span>
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Cross-check helper */}
+        {/* Cross-check helper using user's numbers */}
         <CrossCheck
           totalPaid={totalPaid}
           totalProfit={totalProfit}
-          totalExpense={totalExpense}
-          totalLoansReceived={totalLoansReceived}
           totalLoansGiven={totalLoansGiven}
+          totalLoansReceived={totalLoansReceived}
           running={running}
         />
 
@@ -215,7 +214,112 @@ export default function PortfolioExplain() {
   )
 }
 
-// ── Section ───────────────────────────────────────────────
+// ── Per-project breakdown card ───────────────────────────
+function ProjectBreakdown({ p }) {
+  const paid           = p.invested ?? 0
+  const profit         = p.profit ?? 0
+  const projectTotal   = p.projectTotal ?? 0
+  const scaledCommit   = p.scaledCommitment ?? 0
+  const refundDue      = p.refundDue ?? 0
+  const owes           = p.owes ?? 0
+  const ourPool        = p.ourPool ?? 0
+  const projExpenses   = p.projectExpenses ?? 0
+  const sharePct       = p.share_percent ?? 0
+
+  const items = [
+    { key: 'contrib',  label: 'Share contributions',           amount:  p.contribIn        ?? 0 },
+    { key: 'topup',    label: 'Top-ups (external)',            amount:  p.topUpExternal    ?? 0 },
+    { key: 'expense',  label: 'Expenses you paid personally',  amount:  p.expensePaidByMe  ?? 0 },
+    { key: 'movein',   label: 'Reallocations in',              amount:  p.moveIn           ?? 0 },
+    { key: 'moveout',  label: 'Reallocations out',             amount: -(p.moveOut ?? 0) },
+    { key: 'refund',   label: 'External refunds received',     amount: -(p.refundExternal ?? 0) },
+  ].filter(it => Math.abs(it.amount) > 0.5)
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+      {/* Header */}
+      <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
+        <Link to={`/projects/${p.project_id}`} className="font-semibold text-gray-900 text-sm hover:text-brand-700">
+          {p.name}
+          <span className="ml-2 text-[10px] font-medium text-gray-500">({sharePct}% share)</span>
+        </Link>
+        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+          refundDue > 0 ? 'bg-emerald-50 text-fintech-green' :
+          owes > 0     ? 'bg-red-50 text-fintech-red' :
+                         'bg-gray-100 text-gray-600'
+        }`}>
+          {refundDue > 0.5 ? `Refund due ${fmt(refundDue)}` :
+           owes > 0.5     ? `You owe ${fmt(owes)}` :
+                            'Settled'}
+        </span>
+      </div>
+
+      {/* Project total math */}
+      <div className="px-4 py-3 bg-blue-50/50 text-[12px] space-y-1.5 border-b border-gray-100">
+        <p className="text-[10px] font-semibold text-blue-900 uppercase tracking-wider mb-1">Project total</p>
+        <Line label="Property value (your pool)" value={ourPool} />
+        <Line label="Total expenses to date"     value={projExpenses} prefix="+" />
+        <Line label="Project total (revised pool)" value={projectTotal} bold prefix="=" />
+        <div className="border-t border-blue-100 my-1" />
+        <Line label={`Your scaled commitment (${sharePct}% × project total)`} value={scaledCommit} bold />
+      </div>
+
+      {/* Your payments */}
+      <div className="px-4 py-3 text-[12px] space-y-1.5">
+        <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1">You paid (cash out of pocket)</p>
+        {items.length === 0 && <p className="text-gray-400 italic">No payments recorded.</p>}
+        {items.map(it => (
+          <Line key={it.key} label={it.label} value={it.amount} prefix={it.amount >= 0 ? '+' : '−'} />
+        ))}
+        <div className="border-t border-gray-100 my-1" />
+        <Line label="Total paid by you" value={paid} bold prefix="=" />
+        {profit !== 0 && (
+          <>
+            <div className="border-t border-gray-100 my-1" />
+            <Line label="Profit credited to you" value={profit} bold prefix="+" tone="green" />
+          </>
+        )}
+      </div>
+
+      {/* Settlement explanation */}
+      <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 text-[11px] text-gray-600">
+        <p>
+          You paid <strong className="font-mono">{fmt(paid)}</strong> · Your commitment is
+          {' '}<strong className="font-mono">{fmt(scaledCommit)}</strong>.
+          {refundDue > 0.5 && (
+            <> You overpaid by <strong className="font-mono text-fintech-green">{fmt(refundDue)}</strong> — that's coming back to you (the other investors' share of expenses you fronted).</>
+          )}
+          {owes > 0.5 && (
+            <> You still owe <strong className="font-mono text-fintech-red">{fmt(owes)}</strong> to be fully funded.</>
+          )}
+          {refundDue < 0.5 && owes < 0.5 && (
+            <> You're fully settled on this project.</>
+          )}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// ── Generic line item with optional prefix and bold ──────
+function Line({ label, value, prefix = '', bold = false, tone = 'gray' }) {
+  const toneClass = tone === 'green' ? 'text-fintech-green'
+                  : tone === 'red'   ? 'text-fintech-red'
+                  : 'text-gray-900'
+  return (
+    <div className="flex items-baseline justify-between">
+      <span className={`${bold ? 'font-semibold text-gray-900' : 'text-gray-600'}`}>
+        {prefix && <span className="mr-1 text-gray-400 font-mono w-3 inline-block">{prefix}</span>}
+        {label}
+      </span>
+      <span className={`font-mono ${bold ? `font-bold ${toneClass}` : toneClass}`}>
+        {fmt(value)}
+      </span>
+    </div>
+  )
+}
+
+// ── Section (loans) ──────────────────────────────────────
 function Section({ title, subtotal, op, help, children }) {
   const colorClass = op === '+' ? 'text-fintech-green' : 'text-fintech-red'
   return (
@@ -234,21 +338,19 @@ function Section({ title, subtotal, op, help, children }) {
   )
 }
 
-function Row({ primary, sub, amount, link }) {
+function Row({ primary, sub, amount }) {
   const colorClass = amount > 0 ? 'text-fintech-green' : amount < 0 ? 'text-fintech-red' : 'text-gray-500'
-  const body = (
+  return (
     <div className="flex items-center justify-between px-4 py-2.5">
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-gray-900 truncate">{primary}</p>
         {sub && <p className="text-[10px] text-gray-500 mt-0.5">{sub}</p>}
       </div>
       <p className={`font-mono font-semibold text-sm whitespace-nowrap ml-3 ${colorClass}`}>
-        {amount < 0 ? '− ' : ''}{fmt(Math.abs(amount))}
+        {amount < 0 ? '− ' : '+ '}{fmt(Math.abs(amount))}
       </p>
     </div>
   )
-  if (link) return <Link to={link} className="block hover:bg-gray-50 transition-colors">{body}</Link>
-  return body
 }
 
 function RowEmpty({ text }) {
@@ -266,36 +368,31 @@ function CalcRow({ label, value, op }) {
   )
 }
 
-// ── Cross-check helper — checks user's mental model vs computed ──
-//
-// Lets the user paste in what they remember and the page diffs each
-// line. Hard-coded with the values from the latest user query so
-// Venkatesh can confirm immediately; anyone else gets a generic note.
-function CrossCheck({ totalPaid, totalProfit, totalExpense, totalLoansReceived, totalLoansGiven, running }) {
-  // User-provided figures from the question:
+// ── Cross-check helper ─────────────────────────────────────
+function CrossCheck({ totalPaid, totalProfit, totalLoansGiven, totalLoansReceived, running }) {
+  // User-provided figures from the question of 2026-05-23:
   //   Investment 23,80,000 + Kanchikacherla 8,00,000
   //   + Registration/house expense 2,85,000 + House 98,000 = 35,63,000
   //   Profits 10,50,000, Loan taken 4,80,000
   const claimed = {
-    paid:     2380000 + 800000 + 285000 + 98000,    // = 35,63,000
+    paid:     2380000 + 800000 + 285000 + 98000,
     profit:   1050000,
     loanRecv: 480000,
   }
-  const claimedRunningSimple = claimed.paid + claimed.profit - claimed.loanRecv  // = 41,33,000
-  const claimedRunningWithExpense = claimedRunningSimple - totalExpense
+  const claimedRunning = claimed.paid + claimed.profit - claimed.loanRecv  // = 41,33,000
 
   return (
     <section>
-      <h2 className="text-sm font-bold text-gray-900 mb-2 px-1">Cross-check against your numbers</h2>
+      <h2 className="text-sm font-bold text-gray-900 mb-2 px-1">Cross-check against your stated figures</h2>
       <p className="text-[11px] text-gray-500 mb-3 px-1">
-        Quick diff between what you said you paid / earned / owe and what's actually in the database.
+        Side-by-side diff between what you said you paid / earned / owe and what's actually in the database.
       </p>
       <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 overflow-hidden">
         <CheckRow
-          label="Cash paid in (Investment + Kanchikacherla + Registration + House)"
+          label="Cash paid in (across all projects)"
           claimed={claimed.paid}
           actual={totalPaid}
-          breakdown="2380000 + 800000 + 285000 + 98000 = 3563000"
+          breakdown="Investment 2380000 + Kanchikacherla 800000 + Registration 285000 + House 98000 = 3563000"
         />
         <CheckRow
           label="Profits credited"
@@ -303,45 +400,32 @@ function CrossCheck({ totalPaid, totalProfit, totalExpense, totalLoansReceived, 
           actual={totalProfit}
         />
         <CheckRow
-          label="Loans received (outstanding)"
+          label="Loans you received (outstanding)"
           claimed={claimed.loanRecv}
           actual={totalLoansReceived}
         />
         <CheckRow
-          label="Your share of expenses absorbed (not in your figures)"
-          claimed={null}
-          actual={totalExpense}
-          note="You didn't include this in your math, but the formula subtracts it. If you paid the full 2,85,000 Registration expense personally, your absorbed share is 2,85,000 × (your share %)/100."
-        />
-        <CheckRow
-          label="Loans given (outstanding)"
+          label="Loans you gave (outstanding)"
           claimed={null}
           actual={totalLoansGiven}
-          note="You didn't mention any loans you've given out. If this is 0, nothing changes."
+          note="Not in your figures — assumed zero unless data says otherwise."
         />
       </div>
 
-      {/* Calculated using YOUR numbers */}
       <div className="mt-4 bg-amber-50 border border-amber-200 rounded-2xl p-4 text-[12px] text-amber-900">
-        <p className="font-semibold mb-2">Using YOUR figures (ignoring expense share):</p>
-        <p className="font-mono leading-relaxed whitespace-pre-wrap">
-{`  ₹35,63,000  cash you paid in
-+ ₹10,50,000  profits
-− ₹ 4,80,000  loan you owe back
-─────────────
-= ${fmt(claimedRunningSimple)}  expected running balance`}
-        </p>
+        <p className="font-semibold mb-2">Your math:</p>
+        <pre className="font-mono leading-relaxed whitespace-pre-wrap">
+{`+ ${fmt(claimed.paid)}  cash you paid in
++ ${fmt(claimed.profit)}  profits credited
+− ${fmt(claimed.loanRecv)}  loan you owe back
+─────────────────
+= ${fmt(claimedRunning)}  expected running balance`}
+        </pre>
         <p className="mt-3">
-          Then if your expense share absorbed is <strong>{fmt(totalExpense)}</strong>, the correctly-computed running balance is{' '}
-          <strong className="font-mono">{fmt(claimedRunningWithExpense)}</strong>.
-        </p>
-        <p className="mt-2">
-          The DB-computed value above is <strong className="font-mono text-fintech-green">{fmt(running)}</strong>.
-          {Math.abs(running - claimedRunningWithExpense) < 1
+          DB-computed running balance: <strong className="font-mono text-fintech-green">{fmt(running)}</strong>
+          {Math.abs(running - claimedRunning) < 1
             ? ' ✓ matches your math exactly.'
-            : Math.abs(running - claimedRunningSimple) < 1
-              ? ' ✓ matches if expense share is ignored.'
-              : ` Difference is ${fmt(running - claimedRunningWithExpense)} — check the per-line totals above to find the source.`}
+            : ` — diff of ${fmt(running - claimedRunning)}. Check the per-project breakdown above to find the source.`}
         </p>
       </div>
     </section>
