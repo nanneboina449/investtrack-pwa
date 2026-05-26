@@ -403,6 +403,109 @@ export async function deleteCashAdjustment(id) {
   if (error) throw error
 }
 
+// ── Project Settlement (per-investor refund/owes for closing flow) ──
+//
+// Returns each investor's settlement position on one project using
+// the user's mental model:
+//   project_total      = ourPool + total_expenses_to_date
+//   scaled_commitment  = share% × project_total
+//   paid_net           = sum(non-refund payments) − sum(refunds)
+//   refund_due         = max(0, paid_net − scaled_commitment)
+//   owes               = max(0, scaled_commitment − paid_net)
+//
+// Drives the Close & Settle wizard. Excludes soft-deleted investors.
+export function useProjectSettlement(projectId) {
+  return useFetch(async () => {
+    if (!projectId) return null
+    const [projectRes, investorsRes, paymentsRes, expensesRes] = await Promise.all([
+      supabase.from('my_projects')
+        .select('id, name, status, total_value, our_stake_percent')
+        .eq('id', projectId)
+        .maybeSingle(),
+      supabase.from('investors')
+        .select('id, name, email, share_percent, amount_invested, is_deleted')
+        .eq('project_id', projectId)
+        .eq('is_deleted', false),
+      supabase.from('investor_payments')
+        .select('investor_id, amount, payment_type, source_project_id, destination_project_id')
+        .eq('project_id', projectId),
+      supabase.from('project_expenses').select('amount').eq('project_id', projectId),
+    ])
+    if (projectRes.error)   throw projectRes.error
+    if (investorsRes.error) throw investorsRes.error
+    if (!projectRes.data) throw new Error('Project not found or not accessible')
+
+    const project = projectRes.data
+    const ourPool       = Number(project.total_value ?? 0) * Number(project.our_stake_percent ?? 100) / 100
+    const totalExpenses = (expensesRes.data ?? []).reduce((s, e) => s + Number(e.amount || 0), 0)
+    const projectTotal  = ourPool + totalExpenses
+
+    const paidByInvestor = {}
+    for (const p of (paymentsRes.data ?? [])) {
+      const amt  = Number(p.amount || 0)
+      const sign = p.payment_type === 'refund' ? -1 : 1
+      paidByInvestor[p.investor_id] = (paidByInvestor[p.investor_id] ?? 0) + sign * amt
+    }
+
+    const investors = (investorsRes.data ?? []).map(inv => {
+      const sharePct         = Number(inv.share_percent ?? 0)
+      const scaledCommitment = projectTotal * sharePct / 100
+      const paidNet          = paidByInvestor[inv.id] ?? 0
+      const refundDue        = Math.max(0, paidNet - scaledCommitment)
+      const owes             = Math.max(0, scaledCommitment - paidNet)
+      return {
+        id: inv.id,
+        name: inv.name,
+        email: inv.email,
+        share_percent: sharePct,
+        amount_invested: Number(inv.amount_invested ?? 0),
+        scaledCommitment,
+        paidNet,
+        refundDue,
+        owes,
+        settled: refundDue < 0.5 && owes < 0.5,
+      }
+    }).sort((a, b) => b.share_percent - a.share_percent)
+
+    return {
+      project,
+      ourPool,
+      totalExpenses,
+      projectTotal,
+      investors,
+      totalRefundDue: investors.reduce((s, i) => s + i.refundDue, 0),
+      totalOwes:      investors.reduce((s, i) => s + i.owes, 0),
+      allSettled:     investors.every(i => i.settled),
+    }
+  }, [projectId])
+}
+
+// Pay out an overpaid investor — external refund (no destination project)
+export async function payoutSettlementRefund({ investorId, projectId, amount, note }) {
+  const { error } = await supabase.from('investor_payments').insert({
+    investor_id:  investorId,
+    project_id:   projectId,
+    amount,
+    payment_type: 'refund',
+    payment_date: isoDate(),
+    notes:        note ?? 'Project close settlement — overpayment refunded',
+  })
+  if (error) throw error
+}
+
+// Record cash received from an underpaid investor (collected during close)
+export async function collectSettlementOwes({ investorId, projectId, amount, note }) {
+  const { error } = await supabase.from('investor_payments').insert({
+    investor_id:  investorId,
+    project_id:   projectId,
+    amount,
+    payment_type: 'share_contribution',
+    payment_date: isoDate(),
+    notes:        note ?? 'Project close settlement — owed amount collected',
+  })
+  if (error) throw error
+}
+
 // ── Investor Running Balance ───────────────────────────────────
 export function useInvestorBalances(projectId) {
   return useFetch(async () => {
