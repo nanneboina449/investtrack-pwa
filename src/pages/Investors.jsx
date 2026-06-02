@@ -124,9 +124,12 @@ export default function Investors() {
         <EditPersonSheet
           person={editing}
           onClose={() => setEditing(null)}
-          onSaved={(count) => {
+          onSaved={(result) => {
             setEditing(null); investors.reload()
-            show(`Updated across ${count} project${count === 1 ? '' : 's'}`)
+            const { updated, invited } = result ?? {}
+            const parts = [`Updated across ${updated ?? 0} project${(updated ?? 0) === 1 ? '' : 's'}`]
+            if (invited > 0) parts.push(`${invited} invite${invited === 1 ? '' : 's'} sent`)
+            show(parts.join(' · '))
           }}
         />
       )}
@@ -221,7 +224,7 @@ function EditPersonSheet({ person, onClose, onSaved }) {
         email:       form.email,
         phone:       form.phone,
       })
-      onSaved(result.updated ?? person.projects.length)
+      onSaved(result ?? { updated: person.projects.length, invited: 0 })
     } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
 

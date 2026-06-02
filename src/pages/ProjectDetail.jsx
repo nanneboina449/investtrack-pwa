@@ -823,10 +823,22 @@ function AddInvestorSheet({ open, onClose, projectId, projectValue, projectTotal
         notes:          form.notes || null,
       })
       if (form.email) {
+        // Auto-fire a viewer invite so the new investor sees the project
+        // on their next login. Errors here are non-fatal (the investor
+        // is already created) but we surface them as a warning instead
+        // of swallowing — silent failure here is what caused investors
+        // to log in and see no projects.
         try {
           const { inviteUser } = await import('../hooks/useSharing')
           await inviteUser({ projectId, email: form.email, role: 'viewer' })
-        } catch (_) {}
+        } catch (e) {
+          // Treat 23505 (unique_violation = already invited on this
+          // project) as benign; everything else is worth flagging.
+          const msg = e?.message ?? String(e)
+          if (!/duplicate key|already exists|unique/.test(msg)) {
+            setError(`Investor created, but the project share invite failed: ${msg}`)
+          }
+        }
       }
       setForm({ name: '', email: '', phone: '', share_percent: '', amount_invested: '', notes: '' })
       onSaved()
