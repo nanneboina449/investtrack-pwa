@@ -3,6 +3,7 @@ import { useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   useInvestors, useInvestorBalances, useProfitRecords, useExpenses, useInvestorPayments, useProfitDistributions, useProjects, useAllInvestors,
+  useProjectSettlement, payoutSettlementRefund, collectSettlementOwes,
   createInvestor, deleteInvestor, updateInvestor,
   createProfitRecord, deleteProfitRecord, updateProfitRecord,
   createExpense, deleteExpense, updateExpense,
@@ -23,6 +24,7 @@ export default function ProjectDetail() {
   const [showShare, setShowShare] = useState(false)
   const [showMenu, setShowMenu]   = useState(false)
   const [showEdit, setShowEdit]   = useState(false)
+  const [showSettle, setShowSettle] = useState(false)
 
   const investors      = useInvestors(id)
   const balances       = useInvestorBalances(id)
@@ -137,6 +139,12 @@ export default function ProjectDetail() {
                     className="w-full text-left px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 flex items-center gap-2">
                     👥 Share
                   </button>
+                  {project?.status !== 'completed' && (
+                    <button onClick={() => { setShowSettle(true); setShowMenu(false) }}
+                      className="w-full text-left px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 flex items-center gap-2 border-t border-gray-100">
+                      🔒 Close & Settle
+                    </button>
+                  )}
                   <button onClick={async () => {
                     setShowMenu(false)
                     if (!confirm('Delete this project? This cannot be undone.')) return
@@ -766,6 +774,20 @@ export default function ProjectDetail() {
       {/* Share Modal */}
       {isOwner && project && (
         <ShareModal open={showShare} onClose={() => setShowShare(false)} project={project} />
+      )}
+
+      {/* Close & Settle Wizard */}
+      {isOwner && showSettle && (
+        <CloseSettleSheet
+          projectId={id}
+          onClose={() => setShowSettle(false)}
+          onCompleted={() => {
+            setShowSettle(false)
+            investors.reload(); payments.reload(); balances.reload()
+            allProjects.reload?.()
+            show('Project closed & settled')
+          }}
+        />
       )}
     </div>
   )
@@ -1950,5 +1972,274 @@ function EditProjectSheet({ open, onClose, project, onSaved }) {
         </Field>
       </div>
     </Sheet>
+  )
+}
+
+// ── Close & Settle Wizard ─────────────────────────────────────
+//
+// End-of-project settlement flow. Lists each investor's position and
+// lets the owner:
+//   - Pay out all overpayment refunds in one shot (creates type=refund
+//     payments with no destination_project_id — external cash back)
+//   - Tick off each underpaid investor as "collected" (creates a
+//     type=share_contribution payment for the owed amount)
+//   - Mark the project completed only when everyone is settled (or
+//     written off explicitly)
+//
+// All actions go through the same hooks the rest of the app uses, so
+// the per-investor ledger / Portfolio totals update automatically.
+function CloseSettleSheet({ projectId, onClose, onCompleted }) {
+  const settlement = useProjectSettlement(projectId)
+  const [busy, setBusy] = useState(null)         // 'refunds' | 'complete' | <investor_id>
+  const [error, setError] = useState(null)
+  const [writeOff, setWriteOff] = useState({})   // {investor_id: true} — owner explicitly waives the owe
+
+  if (settlement.loading) {
+    return (
+      <Sheet open onClose={onClose} title="Close & Settle">
+        <div className="py-12 flex items-center justify-center"><Spinner size="lg" /></div>
+      </Sheet>
+    )
+  }
+  if (settlement.error || !settlement.data) {
+    return (
+      <Sheet open onClose={onClose} title="Close & Settle">
+        <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
+          {settlement.error || 'Could not load settlement data.'}
+        </p>
+      </Sheet>
+    )
+  }
+
+  const s = settlement.data
+  const overpaid  = s.investors.filter(i => i.refundDue > 0.5)
+  const underpaid = s.investors.filter(i => i.owes > 0.5)
+  const settled   = s.investors.filter(i => i.settled)
+
+  // Effectively-settled = settled OR written-off
+  const allEffectivelySettled = s.investors.every(i =>
+    i.settled || (i.owes > 0.5 && writeOff[i.id]) || i.refundDue < 0.5
+  )
+  const noRefundsPending = overpaid.length === 0
+
+  // ── Action: payout all overpayments at once ──
+  const handlePayoutAll = async () => {
+    setBusy('refunds'); setError(null)
+    try {
+      for (const inv of overpaid) {
+        await payoutSettlementRefund({
+          investorId: inv.id,
+          projectId,
+          amount: Math.round(inv.refundDue * 100) / 100,
+        })
+      }
+      settlement.reload()
+    } catch (e) { setError(e.message) } finally { setBusy(null) }
+  }
+
+  // ── Action: collect owes from a specific investor (mark received) ──
+  const handleCollect = async (inv) => {
+    setBusy(inv.id); setError(null)
+    try {
+      await collectSettlementOwes({
+        investorId: inv.id,
+        projectId,
+        amount: Math.round(inv.owes * 100) / 100,
+      })
+      settlement.reload()
+    } catch (e) { setError(e.message) } finally { setBusy(null) }
+  }
+
+  // ── Action: mark project completed (only when all settled) ──
+  const handleMarkCompleted = async () => {
+    if (!allEffectivelySettled) {
+      setError('Settle or write off every investor first.')
+      return
+    }
+    setBusy('complete'); setError(null)
+    try {
+      await updateProject(projectId, { status: 'completed' })
+      onCompleted()
+    } catch (e) { setError(e.message) } finally { setBusy(null) }
+  }
+
+  return (
+    <Sheet open onClose={onClose} title="Close & Settle Project"
+      footer={
+        <div>
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">{error}</p>}
+          <button
+            type="button"
+            onClick={handleMarkCompleted}
+            disabled={busy === 'complete' || !allEffectivelySettled}
+            className="btn-primary w-full"
+          >
+            {busy === 'complete' ? 'Marking…'
+              : allEffectivelySettled ? 'Mark Project Completed'
+              : `Settle ${overpaid.length + underpaid.filter(i => !writeOff[i.id]).length} more to complete`}
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        {/* Project total summary */}
+        <div className="bg-blue-50 rounded-2xl p-4 text-[12px] text-blue-900">
+          <p className="font-semibold mb-2">Settlement basis</p>
+          <table className="w-full">
+            <tbody>
+              <tr><td>Property pool</td><td className="text-right font-mono">{inr(Math.round(s.ourPool))}</td></tr>
+              <tr><td>+ Total expenses to date</td><td className="text-right font-mono">{inr(Math.round(s.totalExpenses))}</td></tr>
+              <tr className="border-t border-blue-200"><td className="pt-1 font-semibold">= Project total</td><td className="pt-1 text-right font-mono font-semibold">{inr(Math.round(s.projectTotal))}</td></tr>
+            </tbody>
+          </table>
+          <p className="mt-2 text-[11px] text-blue-800">
+            Each investor's commitment = their share % × project total.
+            Refund / owes = (paid by them) − (their commitment).
+          </p>
+        </div>
+
+        {/* Overpaid — refunds to pay out */}
+        {overpaid.length > 0 && (
+          <section>
+            <div className="flex items-baseline justify-between mb-2 px-1">
+              <h3 className="text-sm font-bold text-gray-900">Overpaid — pay refunds out</h3>
+              <p className="font-mono font-semibold text-sm text-fintech-green">+ {inr(Math.round(s.totalRefundDue))}</p>
+            </div>
+            <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 overflow-hidden">
+              {overpaid.map(inv => (
+                <InvRow key={inv.id} inv={inv} kind="overpaid" />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={handlePayoutAll}
+              disabled={busy === 'refunds'}
+              className="mt-3 w-full text-center text-sm font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl py-2.5 active:scale-95 transition-transform disabled:opacity-50"
+            >
+              {busy === 'refunds' ? 'Paying out…' : `Pay refunds to ${overpaid.length} investor${overpaid.length === 1 ? '' : 's'} (${inr(Math.round(s.totalRefundDue))})`}
+            </button>
+          </section>
+        )}
+
+        {/* Underpaid — owes to collect */}
+        {underpaid.length > 0 && (
+          <section>
+            <div className="flex items-baseline justify-between mb-2 px-1">
+              <h3 className="text-sm font-bold text-gray-900">Underpaid — collect or write off</h3>
+              <p className="font-mono font-semibold text-sm text-fintech-red">− {inr(Math.round(s.totalOwes))}</p>
+            </div>
+            <p className="text-[11px] text-gray-500 mb-2 px-1">
+              Mark "Collected" once the cash is actually in your hands. "Write off" waives the obligation so the project can be closed without it.
+            </p>
+            <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 overflow-hidden">
+              {underpaid.map(inv => (
+                <InvRow
+                  key={inv.id}
+                  inv={inv}
+                  kind="underpaid"
+                  busy={busy === inv.id}
+                  onCollect={() => handleCollect(inv)}
+                  writeOff={!!writeOff[inv.id]}
+                  onToggleWriteOff={() => setWriteOff(w => ({ ...w, [inv.id]: !w[inv.id] }))}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Already settled */}
+        {settled.length > 0 && (
+          <section>
+            <div className="flex items-baseline justify-between mb-2 px-1">
+              <h3 className="text-sm font-bold text-gray-900">Already settled</h3>
+              <p className="text-[11px] text-gray-500">{settled.length} investor{settled.length === 1 ? '' : 's'}</p>
+            </div>
+            <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 overflow-hidden">
+              {settled.map(inv => (
+                <InvRow key={inv.id} inv={inv} kind="settled" />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {s.investors.length === 0 && (
+          <Empty icon="🧑‍💼" title="No investors on this project" />
+        )}
+
+        {/* Status hint */}
+        <div className={`rounded-xl px-3 py-2 text-[11px] ${
+          allEffectivelySettled
+            ? 'bg-emerald-50 text-emerald-800 border border-emerald-100'
+            : 'bg-amber-50 text-amber-800 border border-amber-100'
+        }`}>
+          {allEffectivelySettled
+            ? '✓ Every investor is settled or written off — you can mark the project completed below.'
+            : '⏳ Some investors still have outstanding refunds or owes. Resolve each above before marking the project completed.'}
+        </div>
+      </div>
+    </Sheet>
+  )
+}
+
+// ── Investor row inside Close & Settle wizard ─────────────────
+function InvRow({ inv, kind, busy, onCollect, writeOff, onToggleWriteOff }) {
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="font-semibold text-gray-900 text-sm truncate">{inv.name}</p>
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+              {inv.share_percent}%
+            </span>
+            {kind === 'settled' && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-fintech-green">Settled</span>
+            )}
+            {kind === 'overpaid' && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-fintech-green">
+                Refund due {inr(Math.round(inv.refundDue))}
+              </span>
+            )}
+            {kind === 'underpaid' && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-red-50 text-fintech-red">
+                Owes {inr(Math.round(inv.owes))}
+              </span>
+            )}
+            {kind === 'underpaid' && writeOff && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">
+                Written off
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-gray-500 mt-0.5">
+            Paid <span className="font-mono">{inr(Math.round(inv.paidNet))}</span>
+            {' · Commitment '}<span className="font-mono">{inr(Math.round(inv.scaledCommitment))}</span>
+          </p>
+        </div>
+        {kind === 'underpaid' && (
+          <div className="flex flex-col gap-1 flex-shrink-0">
+            <button
+              type="button"
+              onClick={onCollect}
+              disabled={busy || writeOff}
+              className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-brand-50 text-brand-900 hover:bg-brand-100 disabled:opacity-50 whitespace-nowrap"
+            >
+              {busy ? 'Collecting…' : '✓ Collected'}
+            </button>
+            <button
+              type="button"
+              onClick={onToggleWriteOff}
+              className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg whitespace-nowrap ${
+                writeOff
+                  ? 'bg-gray-300 text-gray-700'
+                  : 'text-gray-500 hover:bg-gray-100'
+              }`}
+            >
+              {writeOff ? 'Undo' : 'Write off'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
