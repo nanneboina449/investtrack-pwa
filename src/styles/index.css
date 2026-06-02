@@ -2,6 +2,36 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ──────────────────────────────────────────────────────────────
+   Responsive design philosophy
+   ──────────────────────────────────────────────────────────────
+   • Mobile-first: the bottom-nav layout adapts at ≥ lg (1024px) to
+     a side-nav with collapsible width (controlled by --sidebar-w).
+   • Content uses fluid containers with a sensible max-width per
+     page section, not a hard phone frame.
+   • Sheet/modal: bottom drawer < md (768px), centered modal ≥ md.
+   • All hard 430px assumptions are gone — laptops, tablets, and
+     ultrawides all get the right amount of horizontal breathing room.
+   ────────────────────────────────────────────────────────────── */
+
+:root {
+  --sidebar-w: 0px;          /* mobile: no sidebar */
+  --sidebar-expanded: 240px;
+  --sidebar-collapsed: 68px;
+  --max-content-w: 1240px;
+  --bottom-nav-h: 4rem;
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --sidebar-w: var(--sidebar-expanded);
+    --bottom-nav-h: 0px;
+  }
+  :root.sidebar-collapsed {
+    --sidebar-w: var(--sidebar-collapsed);
+  }
+}
+
 @layer base {
   * { -webkit-tap-highlight-color: transparent; }
 
@@ -39,7 +69,7 @@
     z-index: 0;
   }
 
-  .pb-nav { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
+  .pb-nav { padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom)); }
 }
 
 @layer components {
@@ -75,7 +105,7 @@
 
   .mono { @apply font-mono; }
 
-  /* Bottom nav */
+  /* Bottom nav (hidden on lg+) */
   .bottom-nav {
     @apply fixed bottom-0 left-0 right-0 z-50 flex items-stretch;
     background: rgba(255,255,255,0.97);
@@ -90,14 +120,13 @@
   }
   .nav-item.active { @apply text-brand-900; }
 
-  /* Sheet / modal */
+  /* ── Sheet / modal ──────────────────────────────────────────
+     Mobile / tablet (< 768px): bottom drawer.
+     Desktop (≥ 768px): centered modal that grows up to 640px.
+     ─────────────────────────────────────────────────────────── */
   .sheet-backdrop {
     position: fixed;
-    top: 0;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(430px, 100vw);
+    inset: 0;
     z-index: 40;
     display: flex;
     flex-direction: column;
@@ -110,9 +139,8 @@
     width: 100%;
     border-radius: 24px 24px 0 0;
     z-index: 50;
-    /* Stop above the bottom nav (4rem) + safe area */
-    margin-bottom: calc(4rem + env(safe-area-inset-bottom));
-    max-height: calc(88vh - 4rem - env(safe-area-inset-bottom));
+    margin-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom));
+    max-height: calc(92vh - var(--bottom-nav-h) - env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;
   }
@@ -120,6 +148,7 @@
     flex: 1;
     overflow-y: auto;
     padding: 0 1.25rem 1rem;
+    -webkit-overflow-scrolling: touch;
   }
   .sheet-header {
     padding: 1.25rem 1.25rem 0;
@@ -138,25 +167,48 @@
   .inr::before { content: '₹'; @apply text-gray-400 mr-0.5; }
 }
 
-/* App frame — the phone-like container on desktop */
+/* ── Fluid app frame ──────────────────────────────────────────
+   No more hard 430px phone-frame. The content gets a sensible
+   max-width that scales: full on mobile, capped on bigger screens.
+   ───────────────────────────────────────────────────────────── */
 .app-frame {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 430px;
   min-height: 100vh;
-  margin: 0 auto;
   background: #f8f9ff;
-  box-shadow:
-    0 0 0 1px rgba(255,255,255,0.08),
-    0 32px 80px rgba(0,0,0,0.5),
-    0 8px 24px rgba(0,0,0,0.3);
+  margin: 0 auto;
 }
 
-@media (min-width: 768px) {
+/* Tablet+: drop the phone-style shadow, lift the background */
+@media (min-width: 640px) {
   .app-frame {
-    min-height: 100vh;
+    background: #f3f4f6;
   }
+}
+
+/* Sheet becomes centered modal at lg+ (where bottom nav is gone).
+   On tablets (md, 768-1023px) the bottom drawer pattern stays but the
+   sheet widens to a comfortable max so it doesn't look stranded. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .sheet {
+    width: min(560px, 96vw);
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+@media (min-width: 1024px) {
+  .sheet-backdrop {
+    justify-content: center;
+    align-items: center;
+  }
+  .sheet {
+    width: min(640px, 92vw);
+    max-height: 88vh;
+    border-radius: 24px;
+    margin-bottom: 0;
+  }
+  .sheet-handle { display: none; }
 }
 
 /* Page transitions */
@@ -166,125 +218,61 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Desktop side decorations */
-@media (min-width: 768px) {
-  .desktop-deco-left,
-  .desktop-deco-right {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    width: calc((100vw - 430px) / 2);
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    padding: 2rem;
-    z-index: 0;
-    pointer-events: none;
-  }
-  .desktop-deco-left  { left: 0; align-items: flex-end; text-align: right; }
-  .desktop-deco-right { right: 0; align-items: flex-start; }
-
-  .deco-label {
-    color: rgba(255,255,255,0.35);
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    margin-bottom: 6px;
-  }
-  .deco-value {
-    color: rgba(255,255,255,0.7);
-    font-size: 22px;
-    font-weight: 700;
-    font-family: 'JetBrains Mono', monospace;
-    margin-bottom: 20px;
-  }
-  .deco-divider {
-    width: 32px;
-    height: 1px;
-    background: rgba(255,255,255,0.15);
-    margin: 12px 0 12px auto;
-  }
-  .deco-right .deco-divider { margin: 12px 0; }
-}
-
-/* ── Standalone PWA: lock width, hide side decorations ─────── */
+/* ── Standalone PWA ─────────────────────────────────────────── */
 @media (display-mode: standalone) {
-  body {
-    /* Keep the background but tighter */
-    background: #0f0c29;
-  }
-
-  /* Hide desktop side labels inside PWA window */
-  .desktop-deco-left,
-  .desktop-deco-right {
-    display: none !important;
-  }
-
-  .app-frame {
-    max-width: 100%;
-    box-shadow: none;
-  }
+  body { background: #0f0c29; }
+  .app-frame { box-shadow: none; }
 }
 
-/* ── Desktop layout (≥ 1024px): wide content + sidebar nav ──── */
+/* ── Desktop layout (≥ 1024px): sidebar nav + wide content ──── */
 @media (min-width: 1024px) {
-  body {
-    background: #f3f4f6;
-  }
-  body::before,
-  body::after {
-    opacity: 0;
+  body { background: #f3f4f6; }
+  body::before, body::after { opacity: 0; }
+
+  /* Constrain content width on desktop and centre it within the
+     non-sidebar area. The sidebar already takes --sidebar-w pixels. */
+  .page-enter {
+    max-width: var(--max-content-w);
+    margin: 0 auto;
   }
 
-  /* Sheet becomes a centered modal */
-  .sheet-backdrop {
-    width: 100%;
-    left: 0;
-    transform: none;
-    justify-content: center;
-    align-items: center;
-  }
-  .sheet {
-    width: min(560px, 90vw);
-    max-height: 85vh;
-    border-radius: 24px;
-    margin-bottom: 0;
-  }
-  .sheet-handle { display: none; }
-
-  /* Page content needs more breathing room on desktop */
+  /* Tame the giant mobile-style status-bar padding on page headers */
   .page-enter > div:first-child[class*="pt-14"],
   .page-enter > div:first-child[class*="pt-12"] {
-    padding-top: 2.5rem !important;
+    padding-top: 2rem !important;
   }
 }
 
-/* Utility: 2-column grid on desktop for page-level sections */
-.lg-grid-2 {
+/* ── Sidebar transition ──────────────────────────────────────── */
+.app-sidebar {
+  transition: width 0.18s ease;
+  width: var(--sidebar-expanded);
+}
+.app-sidebar.collapsed {
+  width: var(--sidebar-collapsed);
+}
+.app-sidebar.collapsed .sidebar-label,
+.app-sidebar.collapsed .sidebar-brand-sub,
+.app-sidebar.collapsed .sidebar-foot-text {
+  display: none;
+}
+.app-sidebar.collapsed .sidebar-brand-icon {
   display: block;
 }
+.app-sidebar.collapsed .nav-link {
+  justify-content: center;
+}
+
+/* ── Utility: hide scrollbar but keep scroll ─────────────────── */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* ── Utility: 2-column grid on desktop for page-level sections ── */
+.lg-grid-2 { display: block; }
 @media (min-width: 1024px) {
   .lg-grid-2 {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 1.25rem;
   }
-
-  /* Constrain content width on desktop and centre it */
-  .page-enter {
-    max-width: 1180px;
-    margin: 0 auto;
-  }
-
-  /* Tame the giant mobile-style status-bar padding on page headers */
-  .page-enter > div:first-child[class*="pt-14"] {
-    padding-top: 2rem !important;
-  }
-  .page-enter > div:first-child[class*="pt-12"] {
-    padding-top: 2rem !important;
-  }
-
-  /* Cards get a bit more padding for desktop comfort */
-  .card { padding: inherit; }
 }

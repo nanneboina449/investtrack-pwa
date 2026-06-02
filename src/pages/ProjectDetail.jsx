@@ -119,12 +119,12 @@ export default function ProjectDetail() {
     <div className="page-enter">
       <Toast />
 
-      {/* Header */}
-      <div className="bg-brand-900 text-white px-5 pt-12 pb-5">
-        <div className="flex justify-between items-center mb-3">
-          <button onClick={() => navigate(-1)} className="text-brand-100 text-sm flex items-center gap-1">← Back</button>
+      {/* Header — full-bleed bar, content padded */}
+      <div className="bg-brand-900 text-white px-4 sm:px-6 lg:px-8 pt-12 lg:pt-8 pb-5">
+        <div className="flex justify-between items-center mb-3 gap-3">
+          <button onClick={() => navigate(-1)} className="text-brand-100 text-sm flex items-center gap-1 flex-shrink-0">← Back</button>
           {isOwner && (
-            <div className="relative">
+            <div className="relative flex-shrink-0">
               <button onClick={() => setShowMenu(!showMenu)}
                 className="flex items-center gap-1 text-sm font-semibold bg-white/15 px-3 py-1.5 rounded-xl active:scale-95 transition-transform">
                 ⋯ More
@@ -158,37 +158,39 @@ export default function ProjectDetail() {
             </div>
           )}
         </div>
-        <h1 className="text-xl font-bold mb-4">{projectName}</h1>
-        <div className="grid grid-cols-3 gap-2 mb-2">
-          <div className="bg-white/10 rounded-xl p-2.5 text-center">
-            <p className="text-brand-100 text-[10px] mb-0.5">Property Value</p>
-            <p className="font-bold mono text-xs">{inr(projectValue)}</p>
+        <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold mb-4 break-words leading-tight pr-2">
+          {projectName}
+        </h1>
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-2">
+          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
+            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Property Value</p>
+            <p className="font-bold mono text-xs sm:text-sm lg:text-base">{inr(projectValue)}</p>
           </div>
-          <div className="bg-white/10 rounded-xl p-2.5 text-center">
-            <p className="text-brand-100 text-[10px] mb-0.5">Net Return</p>
-            <p className={`font-bold mono text-xs ${netReturn >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{inr(netReturn)}</p>
+          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
+            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Net Return</p>
+            <p className={`font-bold mono text-xs sm:text-sm lg:text-base ${netReturn >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{inr(netReturn)}</p>
             {totalExpenses > 0 && <p className='text-[9px] text-white/60 mt-0.5'>-{inr(totalExpenses)} exp</p>}
           </div>
-          <div className="bg-white/10 rounded-xl p-2.5 text-center">
-            <p className="text-brand-100 text-[10px] mb-0.5">Share Filled</p>
-            <p className={`font-bold text-xs ${totalShare >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>{totalShare.toFixed(1)}%</p>
+          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
+            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Share Filled</p>
+            <p className={`font-bold text-xs sm:text-sm lg:text-base ${totalShare >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>{totalShare.toFixed(1)}%</p>
           </div>
         </div>
         {/* Capital flow strip — paid + profit, what's been extracted, what's still working */}
         <div className="grid grid-cols-3 gap-2">
-          <div className="bg-white/10 rounded-xl p-2.5 text-center">
-            <p className="text-brand-100 text-[10px] mb-0.5">Value Generated</p>
-            <p className="font-bold mono text-xs">{inr(valueGenerated)}</p>
+          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
+            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Value Generated</p>
+            <p className="font-bold mono text-xs sm:text-sm lg:text-base">{inr(valueGenerated)}</p>
             <p className="text-[9px] text-white/60 mt-0.5">paid + profit</p>
           </div>
-          <div className="bg-white/10 rounded-xl p-2.5 text-center">
-            <p className="text-brand-100 text-[10px] mb-0.5">Extracted</p>
-            <p className={`font-bold mono text-xs ${totalExtracted > 0 ? 'text-blue-200' : 'text-white/60'}`}>−{inr(totalExtracted)}</p>
+          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
+            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Extracted</p>
+            <p className={`font-bold mono text-xs sm:text-sm lg:text-base ${totalExtracted > 0 ? 'text-blue-200' : 'text-white/60'}`}>−{inr(totalExtracted)}</p>
             <p className="text-[9px] text-white/60 mt-0.5">moved or lent out</p>
           </div>
-          <div className="bg-white/10 rounded-xl p-2.5 text-center">
-            <p className="text-brand-100 text-[10px] mb-0.5">Active Capital</p>
-            <p className={`font-bold mono text-xs ${activeCapital >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{inr(activeCapital)}</p>
+          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
+            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Active Capital</p>
+            <p className={`font-bold mono text-xs sm:text-sm lg:text-base ${activeCapital >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{inr(activeCapital)}</p>
             <p className="text-[9px] text-white/60 mt-0.5">still in this project</p>
           </div>
         </div>

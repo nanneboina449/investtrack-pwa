@@ -37,22 +37,22 @@ export default function Projects() {
         />
       </div>
 
-      <div className="px-4 lg:px-8 py-4">
+      <div className="px-4 sm:px-6 lg:px-8 py-4">
         {loading ? (
           <div className="flex justify-center py-14"><Spinner size="lg" /></div>
         ) : filtered.length === 0 ? (
           <Empty icon="📁" title={`No ${tab} projects`} sub="Tap + New to create one" />
         ) : (
-          <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {filtered.map(p => (
               <div key={p.id} className="card p-4 cursor-pointer active:scale-[0.98] transition-transform"
                 onClick={() => navigate(`/projects/${p.id}`)}>
-                <div className="flex justify-between items-start mb-3">
+                <div className="flex justify-between items-start mb-3 gap-2">
                   <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-gray-900 truncate">{p.name}</p>
+                    <p className="font-semibold text-gray-900 leading-tight break-words" title={p.name}>{p.name}</p>
                     {p.description && <p className="text-xs text-gray-400 truncate mt-0.5">{p.description}</p>}
                   </div>
-                  <span className={`badge-${p.status} ml-2`}>{p.status}</span>
+                  <span className={`badge-${p.status} flex-shrink-0`}>{p.status}</span>
                 </div>
                 <div className="grid grid-cols-4 gap-1 text-center border-t border-gray-50 pt-3">
                   {[
