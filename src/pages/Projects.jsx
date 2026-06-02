@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProjects, createProject } from '../hooks/useData'
-import { inr, isoDate } from '../lib/supabase'
+import { inr, inrCompact, isoDate } from '../lib/supabase'
 import { Sheet, Field, Empty, Spinner, SegControl, useToast, Collapsible } from '../components/ui'
 
 export default function Projects() {
@@ -54,22 +54,36 @@ export default function Projects() {
                   </div>
                   <span className={`badge-${p.status} flex-shrink-0`}>{p.status}</span>
                 </div>
-                <div className="grid grid-cols-4 gap-1 text-center border-t border-gray-50 pt-3">
+                {/* Metric strip — compact Lakh/Crore values, fluid widths,
+                    full precision available on hover via the title attr.
+                    Profit highlighted green when positive; Members has
+                    its own color so it stands out as a count. */}
+                <div className="grid grid-cols-4 gap-2 border-t border-gray-50 pt-3">
                   {[
-                    { l: 'Value',    v: inr(p.total_value) },
-                    { l: 'Raised',   v: inr(p.total_raised ?? 0) },
-                    { l: 'Profit',   v: inr(p.total_profit ?? 0), g: (p.total_profit ?? 0) >= 0 },
-                    { l: 'Members',  v: p.investor_count ?? 0 },
-                  ].map(({ l, v, g }) => (
-                    <div key={l}>
-                      <p className={`text-xs font-bold mono ${g ? 'text-emerald-600' : 'text-gray-800'}`}>{v}</p>
-                      <p className="text-[10px] text-gray-400 mt-0.5">{l}</p>
+                    { l: 'Value',   v: p.total_value,            t: inr(p.total_value),                 isCount: false },
+                    { l: 'Raised',  v: p.total_raised ?? 0,      t: inr(p.total_raised ?? 0),           isCount: false },
+                    { l: 'Profit',  v: p.total_profit ?? 0,      t: inr(p.total_profit ?? 0),           isCount: false, g: (p.total_profit ?? 0) > 0 },
+                    { l: 'Members', v: p.investor_count ?? 0,    t: `${p.investor_count ?? 0} investor${(p.investor_count ?? 0) === 1 ? '' : 's'}`, isCount: true },
+                  ].map(({ l, v, t, g, isCount }) => (
+                    <div key={l} className="min-w-0 text-center">
+                      <p
+                        title={t}
+                        className={`font-bold mono leading-tight tabular-nums whitespace-nowrap overflow-hidden text-ellipsis
+                          text-[11px] sm:text-xs lg:text-sm
+                          ${g ? 'text-emerald-600' : 'text-gray-800'}`}
+                      >
+                        {isCount ? v : inrCompact(v)}
+                      </p>
+                      <p className="text-[10px] text-gray-400 mt-0.5 truncate">{l}</p>
                     </div>
                   ))}
                 </div>
                 {p.expected_return_percent && (
-                  <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-50">
-                    Stake: <span className="font-semibold text-gray-600">{p.our_stake_percent}%</span> · Pool: <span className="font-semibold text-emerald-600">{inr((p.total_value ?? 0) * (p.our_stake_percent ?? 100) / 100)}</span>
+                  <p
+                    className="text-[11px] text-gray-400 mt-2 pt-2 border-t border-gray-50 truncate"
+                    title={`Stake ${p.our_stake_percent}% · Pool ${inr((p.total_value ?? 0) * (p.our_stake_percent ?? 100) / 100)}`}
+                  >
+                    Stake <span className="font-semibold text-gray-600">{p.our_stake_percent}%</span> · Pool <span className="font-semibold text-emerald-600">{inrCompact((p.total_value ?? 0) * (p.our_stake_percent ?? 100) / 100)}</span>
                   </p>
                 )}
               </div>

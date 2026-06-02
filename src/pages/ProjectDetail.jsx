@@ -12,7 +12,7 @@ import {
   updateProject, deleteProject
 } from '../hooks/useData'
 import { useMyRole } from '../hooks/useSharing'
-import { inr, pct, isoDate, supabase } from '../lib/supabase'
+import { inr, inrCompact, pct, isoDate, supabase } from '../lib/supabase'
 import { Sheet, Field, ShareBar, ProgressBar, SegControl, Spinner, Empty, useToast, Collapsible } from '../components/ui'
 import ShareModal from '../components/ShareModal'
 
@@ -162,37 +162,25 @@ export default function ProjectDetail() {
           {projectName}
         </h1>
         <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-2">
-          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
-            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Property Value</p>
-            <p className="font-bold mono text-xs sm:text-sm lg:text-base">{inr(projectValue)}</p>
-          </div>
-          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
-            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Net Return</p>
-            <p className={`font-bold mono text-xs sm:text-sm lg:text-base ${netReturn >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{inr(netReturn)}</p>
-            {totalExpenses > 0 && <p className='text-[9px] text-white/60 mt-0.5'>-{inr(totalExpenses)} exp</p>}
-          </div>
-          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
-            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Share Filled</p>
-            <p className={`font-bold text-xs sm:text-sm lg:text-base ${totalShare >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>{totalShare.toFixed(1)}%</p>
+          <HeaderMetric label="Property Value" value={projectValue} fullValue={inr(projectValue)} />
+          <HeaderMetric
+            label="Net Return"
+            value={netReturn}
+            fullValue={inr(netReturn)}
+            tone={netReturn >= 0 ? 'good' : 'bad'}
+            sub={totalExpenses > 0 ? `−${inrCompact(totalExpenses)} exp` : null}
+            subTitle={totalExpenses > 0 ? `Expenses ${inr(totalExpenses)}` : null}
+          />
+          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center min-w-0">
+            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5 truncate">Share Filled</p>
+            <p className={`font-bold leading-tight tabular-nums text-xs sm:text-sm lg:text-base ${totalShare >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>{totalShare.toFixed(1)}%</p>
           </div>
         </div>
         {/* Capital flow strip — paid + profit, what's been extracted, what's still working */}
-        <div className="grid grid-cols-3 gap-2">
-          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
-            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Value Generated</p>
-            <p className="font-bold mono text-xs sm:text-sm lg:text-base">{inr(valueGenerated)}</p>
-            <p className="text-[9px] text-white/60 mt-0.5">paid + profit</p>
-          </div>
-          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
-            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Extracted</p>
-            <p className={`font-bold mono text-xs sm:text-sm lg:text-base ${totalExtracted > 0 ? 'text-blue-200' : 'text-white/60'}`}>−{inr(totalExtracted)}</p>
-            <p className="text-[9px] text-white/60 mt-0.5">moved or lent out</p>
-          </div>
-          <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center">
-            <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5">Active Capital</p>
-            <p className={`font-bold mono text-xs sm:text-sm lg:text-base ${activeCapital >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{inr(activeCapital)}</p>
-            <p className="text-[9px] text-white/60 mt-0.5">still in this project</p>
-          </div>
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          <HeaderMetric label="Value Generated" value={valueGenerated} fullValue={inr(valueGenerated)} sub="paid + profit" />
+          <HeaderMetric label="Extracted" value={totalExtracted} fullValue={inr(totalExtracted)} prefix="−" tone={totalExtracted > 0 ? 'extracted' : 'muted'} sub="moved or lent out" />
+          <HeaderMetric label="Active Capital" value={activeCapital} fullValue={inr(activeCapital)} tone={activeCapital >= 0 ? 'good' : 'bad'} sub="still in this project" />
         </div>
       </div>
 
@@ -2242,6 +2230,39 @@ function InvRow({ inv, kind, busy, onCollect, writeOff, onToggleWriteOff }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── HeaderMetric ───────────────────────────────────────────────
+// Compact header metric tile used in the dark project header strip.
+// Renders the value as inrCompact() so big numbers don't overflow
+// the 3-column grid on narrow phones, with the full-precision value
+// available on hover via the title attribute.
+function HeaderMetric({ label, value, fullValue, sub, subTitle, prefix = '', tone }) {
+  const toneClass =
+    tone === 'good'      ? 'text-emerald-300' :
+    tone === 'bad'       ? 'text-red-300'     :
+    tone === 'extracted' ? 'text-blue-200'    :
+    tone === 'muted'     ? 'text-white/60'    :
+                           ''
+  return (
+    <div className="bg-white/10 rounded-xl p-2.5 sm:p-3 text-center min-w-0">
+      <p className="text-brand-100 text-[10px] sm:text-xs mb-0.5 truncate">{label}</p>
+      <p
+        title={fullValue}
+        className={`font-bold mono leading-tight tabular-nums whitespace-nowrap overflow-hidden text-ellipsis text-xs sm:text-sm lg:text-base ${toneClass}`}
+      >
+        {prefix}{inrCompact(value)}
+      </p>
+      {sub && (
+        <p
+          title={subTitle ?? undefined}
+          className="text-[9px] text-white/60 mt-0.5 truncate"
+        >
+          {sub}
+        </p>
+      )}
     </div>
   )
 }
