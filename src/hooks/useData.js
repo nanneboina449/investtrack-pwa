@@ -152,8 +152,14 @@ export async function updateInvestor(id, values) {
 // Update a PERSON across every project they're on. Treats investors
 // with the same normalized name (lowercase + whitespace collapsed) as
 // the same person and propagates email/phone/displayName updates to
-// every matching row. RLS may reject rows the user can't edit; we
-// silently skip those and report the count actually updated.
+// every matching row.
+//
+// When a new email is attached (or changed), also creates
+// project_members invites for each project the person is on so the
+// auto-accept flow at next login grants them access. Without this
+// the email gets written to the investors table but the user still
+// can't see the projects because RLS visibility comes from
+// project_members, not investors.
 //
 // Used by /investors — the central contact-details management screen.
 export async function updatePerson({ currentName, newName, email, phone }) {
@@ -161,15 +167,16 @@ export async function updatePerson({ currentName, newName, email, phone }) {
   const key = norm(currentName)
   if (!key) throw new Error('currentName is required')
 
-  // Find every row matching the current normalized name (RLS-scoped)
+  // Find every row matching the current normalized name. project_id is
+  // pulled too so we can fire project_members invites if a new email
+  // is being attached.
   const { data: rows, error: findErr } = await supabase
     .from('investors')
-    .select('id, name')
+    .select('id, name, project_id')
     .eq('is_deleted', false)
   if (findErr) throw findErr
-  const targetIds = (rows ?? [])
-    .filter(r => norm(r.name) === key)
-    .map(r => r.id)
+  const matches = (rows ?? []).filter(r => norm(r.name) === key)
+  const targetIds = matches.map(r => r.id)
   if (targetIds.length === 0) {
     throw new Error(`No investor records found for "${currentName}"`)
   }
@@ -214,7 +221,47 @@ export async function updatePerson({ currentName, newName, email, phone }) {
       `supabase/fix_investors_update_rls.sql in the Supabase SQL editor.`
     )
   }
-  return { updated: count }
+
+  // If an email was attached (or changed), make sure each project this
+  // person is on has a project_members invite for them. The accept RPC
+  // on their next login will flip those invites to 'accepted' and
+  // populate user_id, granting them access via RLS.
+  let invited = 0
+  const inviteErrors = []
+  const targetEmail = patch.email
+  if (targetEmail) {
+    const projectIds = [...new Set(matches.map(r => r.project_id))]
+    // Skip projects that already have a row for this email (the unique
+    // constraint on (project_id, invited_email) would block dupes
+    // anyway, but checking first lets us report a clean newly-invited
+    // count and avoid bumping a previously-accepted row back to pending).
+    const { data: existing } = await supabase
+      .from('project_members')
+      .select('project_id')
+      .eq('invited_email', targetEmail)
+      .in('project_id', projectIds)
+    const already = new Set((existing ?? []).map(r => r.project_id))
+    const toInvite = projectIds.filter(pid => !already.has(pid))
+
+    if (toInvite.length > 0) {
+      const { data: { session } } = await supabase.auth.getSession()
+      const inviteRows = toInvite.map(pid => ({
+        project_id:    pid,
+        invited_by:    session?.user?.id ?? null,
+        invited_email: targetEmail,
+        role:          'viewer',
+        status:        'pending',
+      }))
+      const { data: inserted, error: invErr } = await supabase
+        .from('project_members')
+        .insert(inviteRows)
+        .select('id')
+      if (invErr) inviteErrors.push(invErr.message)
+      else invited = inserted?.length ?? toInvite.length
+    }
+  }
+
+  return { updated: count, invited, inviteErrors }
 }
 
 // ── Profit Records ────────────────────────────────────────────
